@@ -2,7 +2,7 @@
 
 Standalone local Flask dashboard for tracking CivitAI creator model statistics over time.
 
-CivitTrack saves API snapshots to SQLite, compares them over time, and answers the practical question: which model or version gained downloads, reactions, favorites, comments, and ratings since the last check?
+CivitTrack saves API snapshots to SQLite, compares them over time, and answers the practical question: which model or version gained downloads, reactions, collection adds, and comments since the last check?
 
 It does not download models or preview images, scrape HTML, or expose the API key to the browser.
 
@@ -59,11 +59,24 @@ python app.py
 
 Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
-Click **Take Snapshot Now** to store the first snapshot. Take another snapshot later, then click **Compare Latest vs Previous**. The model table sorts growth by download delta by default, while the version table reveals which model version gained downloads.
+Click **Take Snapshot** to store the first snapshot. Add an optional local note to record context such as a preview-image change or a newly published version. Take another snapshot later, then click **Compare Latest vs Previous**. The model table sorts growth by newest publication date by default, while the version table reveals which model version gained downloads.
 
-The **Current Model Breakdown** table expands the latest account totals into individual models. Switch between **Downloads** and **Reactions** to see which models make up each total without changing the snapshot comparison view.
+Use the floating navigation tabs to switch between four focused sections:
+
+- **Overview** keeps snapshot capture and comparison controls beside growth analytics.
+- **Models** expands the latest account totals into a searchable model portfolio. Switch between **Downloads**, **Reactions**, and **Collections** to rank each total, or sort models by newest and oldest publication date.
+- **Snapshots** lists stored snapshot history, including notes and a confirmed delete action for removing an unwanted snapshot and its related model-version records.
+- **Settings** shows local configuration, backup and restore controls, and sync logs.
+
+The **Model Growth** comparison defaults to newest models first. Use its sort controls to switch to oldest models or rank by download and reaction growth. After comparing snapshots, **Top Movers** highlights the strongest download, collection, and reaction gains plus the top newly detected model by downloads.
+
+The displayed **Published** date uses the newest available model-version publication or creation date returned by CivitAI.
+
+Dashboard dates use `DD/MM/YYYY`. Snapshot and log timestamps keep the local `HH:mm` time after the date. Clicking a model row opens Stored Timeline with its remote CivitAI cover image when available; CivitTrack does not download that image into local storage.
 
 CSV export becomes available after selecting a comparison.
+
+Settings includes local SQLite backup and restore controls. Download a backup before major changes. Restore validates the uploaded SQLite file before replacing the active database and keeps an automatic pre-restore safety copy under `storage/backups/`.
 
 ## CLI
 
@@ -103,6 +116,8 @@ CIVITAI_BASE_URL=https://civitai.com
 CIVITAI_ANALYTICS_DB=storage/civittrack.sqlite
 CIVITAI_TIMEOUT_SECONDS=20
 CIVITAI_MODEL_TYPES=LORA
+CIVITAI_INCLUDE_NSFW=true
+CIVITAI_INCLUDE_MINOR=true
 CIVITAI_MAX_PAGES=100
 APP_HOST=127.0.0.1
 APP_PORT=8787
@@ -110,3 +125,13 @@ SECRET_KEY=dev-only-change-me
 ```
 
 The SQLite database is created automatically under `storage/`.
+
+`CIVITAI_BASE_URL` controls both API requests and clickable model-page links in the dashboard and CSV exports. The default is `https://civitai.com`.
+
+`CIVITAI_INCLUDE_NSFW=true` is recommended for creator analytics. It tells the CivitAI models API to include restricted models whose showcase content is not visible at the default browsing level.
+
+`CIVITAI_INCLUDE_MINOR=true` is also recommended. CivitAI's public REST listing excludes models flagged as minor even when restricted models are enabled. CivitTrack discovers those creator-owned model IDs through CivitAI's JSON site API, loads their REST details, and merges them into the snapshot without duplicates. If that discovery endpoint is temporarily unavailable, CivitTrack saves the standard REST snapshot and records a warning.
+
+CivitTrack also reads each model's collection count from CivitAI's JSON site API because the public REST listing does not currently include that metric. Snapshots created before collection tracking was added show that value as unavailable.
+
+CivitTrack fetches statistics and metadata only. It does not download showcase images or model files.

@@ -16,14 +16,34 @@
   </div>
 </nav>
 
+<aside class="ct-side-tabs" aria-label="Application sections">
+  <button class="ct-side-tab active" type="button" data-view="overview" aria-controls="overviewView" aria-selected="true" title="Overview">
+    <i class="bi bi-grid-1x2-fill"></i>
+    <span>Overview</span>
+  </button>
+  <button class="ct-side-tab" type="button" data-view="models" aria-controls="modelsView" aria-selected="false" title="Models">
+    <i class="bi bi-boxes"></i>
+    <span>Models</span>
+  </button>
+  <button class="ct-side-tab" type="button" data-view="snapshots" aria-controls="snapshotsView" aria-selected="false" title="Snapshots">
+    <i class="bi bi-camera-fill"></i>
+    <span>Snapshots</span>
+  </button>
+  <button class="ct-side-tab" type="button" data-view="settings" aria-controls="settingsView" aria-selected="false" title="Settings">
+    <i class="bi bi-gear-fill"></i>
+    <span>Settings</span>
+  </button>
+</aside>
+
 <main class="container ct-main">
   <div id="alertArea" class="ct-alert-area" aria-live="polite"></div>
 
+  <div id="overviewView" class="ct-view" data-view-panel="overview">
   <section class="ct-hero ct-card">
     <div>
       <span class="ct-eyebrow"><i class="bi bi-graph-up-arrow"></i> Local creator intelligence</span>
       <h1>Track what actually grows.</h1>
-      <p>Take CivitAI stat snapshots, compare them, and see which LoRA gained downloads, reactions, favorites, and comments.</p>
+      <p>Take CivitAI stat snapshots, compare them, and see which LoRA gained downloads, reactions, collection adds, and comments.</p>
     </div>
     <div class="ct-hero-actions">
       <button class="btn ct-btn-primary js-snapshot" type="button">
@@ -36,23 +56,6 @@
     </div>
   </section>
 
-  <section class="ct-card ct-setup">
-    <div class="ct-section-heading">
-      <div>
-        <span class="ct-eyebrow">Setup status</span>
-        <h2>Local connection</h2>
-      </div>
-      <span id="setupPill" class="ct-pill ct-pill-muted">Checking</span>
-    </div>
-    <div class="ct-setup-grid">
-      <div><span>Username</span><strong id="setupUsername">-</strong></div>
-      <div><span>API key</span><strong id="setupApiKey">-</strong></div>
-      <div><span>Model filter</span><strong id="setupModelFilter">-</strong></div>
-      <div><span>Database</span><strong id="setupDbPath">-</strong></div>
-    </div>
-    <p id="setupHelp" class="ct-help mb-0"></p>
-  </section>
-
   <section id="emptyState" class="ct-card ct-empty">
     <i class="bi bi-camera"></i>
     <h2>No snapshots yet.</h2>
@@ -61,29 +64,6 @@
   </section>
 
   <section id="metricsGrid" class="ct-metrics" aria-label="Account summary"></section>
-
-  <section class="ct-card ct-table-card">
-    <div class="ct-section-heading ct-table-heading">
-      <div>
-        <span class="ct-eyebrow">Latest snapshot totals</span>
-        <h2>Current Model Breakdown</h2>
-      </div>
-      <label class="ct-search"><i class="bi bi-search"></i><input id="breakdownSearch" type="search" placeholder="Search current models"></label>
-    </div>
-    <div class="ct-breakdown-toolbar">
-      <div class="ct-filter-row" id="breakdownFilters">
-        <button class="ct-filter active" data-breakdown-metric="download_count">Downloads</button>
-        <button class="ct-filter" data-breakdown-metric="reaction_count">Reactions</button>
-      </div>
-      <small id="breakdownHelp" class="ct-help">Take a snapshot to see which models make up your totals.</small>
-    </div>
-    <div class="table-responsive ct-table-wrap ct-breakdown-wrap">
-      <table class="table ct-table ct-breakdown-table mb-0">
-        <thead><tr><th>#</th><th>Model</th><th>Type</th><th>Base</th><th>Downloads</th><th>Reactions</th><th>Share</th><th>Latest version</th><th>Link</th></tr></thead>
-        <tbody id="breakdownRows"><tr><td colspan="9" class="ct-table-empty">Take a snapshot to see your current model totals.</td></tr></tbody>
-      </table>
-    </div>
-  </section>
 
   <section class="ct-card ct-controls">
     <div class="ct-section-heading">
@@ -94,14 +74,11 @@
       <small id="compareHelp" class="ct-help">Need at least 2 snapshots to compare growth.</small>
     </div>
     <div class="ct-action-row">
-      <button class="btn ct-btn-primary js-snapshot" type="button">
-        <i class="bi bi-camera"></i> Take Snapshot Now
-      </button>
       <button class="btn ct-btn-secondary js-compare-latest" type="button">
         <i class="bi bi-arrow-left-right"></i> Compare Latest vs Previous
       </button>
     </div>
-    <div class="ct-select-row">
+    <div class="ct-select-row ct-compare-row">
       <label>From snapshot<select id="fromSnapshot" class="form-select"></select></label>
       <label>To snapshot<select id="toSnapshot" class="form-select"></select></label>
       <button id="compareSelected" class="btn ct-btn-quiet" type="button">Compare Selected</button>
@@ -111,7 +88,7 @@
     </div>
     <details class="ct-advanced">
       <summary>Advanced Compare</summary>
-      <div class="ct-select-row">
+      <div class="ct-select-row ct-compare-row">
         <label>From date and time<input id="fromDate" class="form-control" type="datetime-local"></label>
         <label>To date and time<input id="toDate" class="form-control" type="datetime-local"></label>
         <button id="compareDate" class="btn ct-btn-quiet" type="button">Compare by Date</button>
@@ -120,6 +97,16 @@
   </section>
 
   <section id="insightStrip" class="ct-insight d-none" aria-live="polite"></section>
+
+  <section id="topMoversSection" class="ct-movers d-none" aria-label="Top movers">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Selected comparison</span>
+        <h2>Top Movers</h2>
+      </div>
+    </div>
+    <div id="topMoversGrid" class="ct-mover-grid"></div>
+  </section>
 
   <section class="ct-card ct-table-card">
     <div class="ct-section-heading ct-table-heading">
@@ -133,14 +120,20 @@
       <button class="ct-filter active" data-filter="all">All Growth</button>
       <button class="ct-filter" data-filter="download_count">Downloads</button>
       <button class="ct-filter" data-filter="reaction_count">Reactions</button>
-      <button class="ct-filter" data-filter="favorite_count">Favorites</button>
+      <button class="ct-filter" data-filter="collected_count">Collections</button>
       <button class="ct-filter" data-filter="comment_count">Comments</button>
-      <button class="ct-filter" data-filter="rating_count">Rating Count</button>
       <label class="ct-check"><input id="showUnchanged" type="checkbox"> Show unchanged models</label>
+    </div>
+    <div class="ct-sort-row ct-growth-sort-row" id="modelSorts">
+      <span>Sort</span>
+      <button class="ct-filter active" data-model-sort="newest">Newest</button>
+      <button class="ct-filter" data-model-sort="oldest">Oldest</button>
+      <button class="ct-filter" data-model-sort="download_count">Downloads delta</button>
+      <button class="ct-filter" data-model-sort="reaction_count">Reactions delta</button>
     </div>
     <div class="table-responsive ct-table-wrap">
       <table class="table ct-table mb-0">
-        <thead><tr><th>#</th><th>Model</th><th>Type</th><th>Base</th><th>Downloads</th><th>Reactions</th><th>Favorites</th><th>Comments</th><th>Ratings</th><th>Latest version</th><th>Link</th></tr></thead>
+        <thead><tr><th>#</th><th>Model</th><th>Published</th><th>Type</th><th>Base</th><th>Downloads</th><th>Reactions</th><th>Collections</th><th>Comments</th><th>Latest version</th><th>Link</th></tr></thead>
         <tbody id="modelRows"><tr><td colspan="11" class="ct-table-empty">Take two snapshots to reveal model growth.</td></tr></tbody>
       </table>
     </div>
@@ -155,16 +148,104 @@
       </summary>
       <div class="table-responsive ct-table-wrap">
         <table class="table ct-table mb-0">
-          <thead><tr><th>#</th><th>Model</th><th>Version</th><th>Base</th><th>Downloads</th><th>Ratings</th><th>Status</th></tr></thead>
-          <tbody id="versionRows"><tr><td colspan="7" class="ct-table-empty">No comparison selected.</td></tr></tbody>
+          <thead><tr><th>#</th><th>Model</th><th>Version</th><th>Base</th><th>Downloads</th><th>Status</th></tr></thead>
+          <tbody id="versionRows"><tr><td colspan="6" class="ct-table-empty">No comparison selected.</td></tr></tbody>
         </table>
       </div>
       <button id="showAllVersions" class="btn ct-btn-quiet mt-3 d-none" type="button">Show all versions</button>
     </details>
   </section>
 
+  </div>
+
+  <div id="modelsView" class="ct-view d-none" data-view-panel="models">
+  <section class="ct-card ct-table-card">
+    <div class="ct-section-heading ct-table-heading">
+      <div>
+        <span class="ct-eyebrow">Latest snapshot totals</span>
+        <h2>Model Portfolio</h2>
+      </div>
+      <label class="ct-search"><i class="bi bi-search"></i><input id="breakdownSearch" type="search" placeholder="Search current models"></label>
+    </div>
+    <div class="ct-breakdown-toolbar">
+      <div class="ct-filter-row" id="breakdownFilters">
+        <button class="ct-filter active" data-breakdown-metric="download_count">Downloads</button>
+        <button class="ct-filter" data-breakdown-metric="reaction_count">Reactions</button>
+        <button class="ct-filter" data-breakdown-metric="collected_count">Collections</button>
+      </div>
+      <div class="ct-sort-row" id="breakdownSorts">
+        <span>Sort</span>
+        <button class="ct-filter active" data-breakdown-sort="metric">Top first</button>
+        <button class="ct-filter" data-breakdown-sort="newest">Newest</button>
+        <button class="ct-filter" data-breakdown-sort="oldest">Oldest</button>
+      </div>
+      <small id="breakdownHelp" class="ct-help">Take a snapshot to see which models make up your totals.</small>
+    </div>
+    <div class="table-responsive ct-table-wrap ct-breakdown-wrap">
+      <table class="table ct-table ct-breakdown-table mb-0">
+        <thead><tr><th>#</th><th>Model</th><th>Published</th><th id="breakdownMetricHeading">Downloads</th><th>Reactions</th><th>Collections</th><th>Share</th><th>Latest version</th><th>Link</th></tr></thead>
+        <tbody id="breakdownRows"><tr><td colspan="9" class="ct-table-empty">Take a snapshot to see your current model totals.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <div id="snapshotsView" class="ct-view d-none" data-view-panel="snapshots">
+  <section class="ct-card ct-table-card">
+    <div class="ct-section-heading ct-table-heading">
+      <div>
+        <span class="ct-eyebrow">Stored history</span>
+        <h2>Saved Snapshots</h2>
+      </div>
+      <small id="snapshotListHelp" class="ct-help">Loading saved snapshots.</small>
+    </div>
+    <div class="table-responsive ct-table-wrap">
+      <table class="table ct-table mb-0">
+        <thead><tr><th>Snapshot</th><th>Checked at</th><th>Note</th><th>Source</th><th>Models</th><th>Downloads</th><th>Reactions</th><th>Collections</th><th>Comments</th><th>Action</th></tr></thead>
+        <tbody id="snapshotRows"><tr><td colspan="10" class="ct-table-empty">Loading saved snapshots.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <div id="settingsView" class="ct-view d-none" data-view-panel="settings">
+  <section class="ct-card ct-setup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Setup status</span>
+        <h2>Local Connection</h2>
+      </div>
+      <span id="setupPill" class="ct-pill ct-pill-muted">Checking</span>
+    </div>
+    <div class="ct-setup-grid">
+      <div><span>Username</span><strong id="setupUsername">-</strong></div>
+      <div><span>API key</span><strong id="setupApiKey">-</strong></div>
+      <div><span>Model filter</span><strong id="setupModelFilter">-</strong></div>
+      <div><span>Restricted / minor</span><strong id="setupRestrictedModels">-</strong></div>
+      <div><span>Database</span><strong id="setupDbPath">-</strong></div>
+    </div>
+    <p id="setupHelp" class="ct-help mb-0"></p>
+  </section>
+
+  <section class="ct-card ct-data-tools">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Local data safety</span>
+        <h2>Backup And Restore</h2>
+      </div>
+    </div>
+    <p class="ct-help">Download a SQLite backup before major changes. Restoring replaces the current local database after validation and keeps an automatic pre-restore safety copy.</p>
+    <div class="ct-action-row">
+      <a class="btn ct-btn-secondary" href="/api/database-backup"><i class="bi bi-download"></i> Download Backup</a>
+      <form id="restoreForm" class="ct-restore-form">
+        <label class="ct-file-label">Restore backup<input id="restoreFile" class="form-control" type="file" name="backup" accept=".sqlite,.sqlite3,.db" required></label>
+        <button id="restoreDatabase" class="btn ct-btn-danger" type="submit"><i class="bi bi-arrow-counterclockwise"></i> Restore Database</button>
+      </form>
+    </div>
+  </section>
+
   <section class="ct-card ct-log-card">
-    <details>
+    <details open>
       <summary class="ct-details-summary">
         <span><span class="ct-eyebrow">Activity</span><strong>Sync Logs</strong></span>
         <small>Local snapshot events</small>
@@ -172,7 +253,28 @@
       <div id="logRows" class="ct-logs"><div class="ct-log-info">Logs will appear here.</div></div>
     </details>
   </section>
+  </div>
 </main>
+
+<div class="modal fade ct-modal" id="snapshotModal" tabindex="-1" aria-labelledby="snapshotModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form id="snapshotForm" class="modal-content">
+      <div class="modal-header">
+        <div><span class="ct-eyebrow">Capture context</span><h2 id="snapshotModalTitle" class="modal-title">Take Snapshot</h2></div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <label class="ct-note-field" for="snapshotNote">Optional note</label>
+        <textarea id="snapshotNote" class="form-control ct-note-input" maxlength="500" rows="4" placeholder="Example: published new preview images or updated tags"></textarea>
+        <small class="ct-help ct-note-help">This note is stored locally with the snapshot.</small>
+      </div>
+      <div class="modal-footer">
+        <button class="btn ct-btn-quiet" type="button" data-bs-dismiss="modal">Cancel</button>
+        <button id="confirmSnapshot" class="btn ct-btn-primary" type="submit"><i class="bi bi-camera"></i> Take Snapshot</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <div class="offcanvas offcanvas-end ct-offcanvas" tabindex="-1" id="historyDrawer" aria-labelledby="historyTitle">
   <div class="offcanvas-header">

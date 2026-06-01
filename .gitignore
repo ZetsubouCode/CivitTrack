@@ -59,6 +59,7 @@ storage/*.sqlite
 storage/*.sqlite-journal
 storage/*.sqlite-shm
 storage/*.sqlite-wal
+storage/backups/
 
 # Translations
 *.mo

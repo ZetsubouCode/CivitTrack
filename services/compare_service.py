@@ -7,16 +7,14 @@ from .db import create_connection, dict_rows
 ACCOUNT_METRICS = (
     "total_download_count",
     "total_reaction_count",
-    "total_favorite_count",
+    "total_collected_count",
     "total_comment_count",
-    "total_rating_count",
 )
 MODEL_METRICS = (
     "download_count",
     "reaction_count",
-    "favorite_count",
+    "collected_count",
     "comment_count",
-    "rating_count",
 )
 
 
@@ -26,9 +24,9 @@ def list_snapshots(username: str | None = None) -> list[dict]:
         return dict_rows(
             connection.execute(
                 "SELECT s.id, s.checked_at, s.source, s.model_type_filter, s.raw_total_item, "
+                "s.note, "
                 "a.model_count, a.follower_count, a.total_download_count, "
-                "a.total_reaction_count, a.total_favorite_count, a.total_comment_count, "
-                "a.total_rating_count "
+                "a.total_reaction_count, a.total_collected_count, a.total_comment_count "
                 "FROM snapshot s JOIN account_snapshot a ON a.snapshot_id = s.id "
                 "WHERE s.username = ? AND s.api_ok = 1 ORDER BY s.checked_at DESC, s.id DESC",
                 (username,),
@@ -37,7 +35,8 @@ def list_snapshots(username: str | None = None) -> list[dict]:
 
 
 def get_latest_breakdown(username: str | None = None) -> dict:
-    username = username or get_config().username
+    config = get_config()
+    username = username or config.username
     snapshots = list_snapshots(username)
     if not snapshots:
         return {"snapshot": None, "totals": None, "models": []}
@@ -46,13 +45,15 @@ def get_latest_breakdown(username: str | None = None) -> dict:
         models = dict_rows(
             connection.execute(
                 "SELECT model_id, model_name, model_type, page_url, base_model, "
-                "latest_version_name, download_count, reaction_count, favorite_count, "
-                "comment_count, rating_count, rating FROM model_snapshot "
+                "latest_version_name, published_at, download_count, reaction_count, collected_count, "
+                "comment_count FROM model_snapshot "
                 "WHERE snapshot_id = ? "
                 "ORDER BY download_count DESC, reaction_count DESC, model_name ASC",
                 (snapshot["id"],),
             )
         )
+    for model in models:
+        model["page_url"] = config.model_page_url(model["model_id"])
     return {"snapshot": snapshot, "totals": snapshot, "models": models}
 
 
@@ -69,7 +70,12 @@ def _delta(old, new):
     return (new or 0) - (old or 0)
 
 
+def _optional_delta(old, new):
+    return new - old if old is not None and new is not None else None
+
+
 def compare_snapshots(from_id: int, to_id: int) -> dict:
+    config = get_config()
     with create_connection() as connection:
         old_account = _load_snapshot(connection, from_id)
         new_account = _load_snapshot(connection, to_id)
@@ -100,29 +106,32 @@ def compare_snapshots(from_id: int, to_id: int) -> dict:
                 "model_id": model_id,
                 "model_name": current["model_name"],
                 "model_type": current["model_type"],
-                "page_url": current["page_url"],
+                "page_url": config.model_page_url(model_id),
                 "base_model": current["base_model"],
                 "latest_version_name": current["latest_version_name"],
-                "old_rating": old["rating"] if old else 0,
-                "new_rating": new["rating"] if new else None,
-                "rating_delta": _delta(old["rating"] if old else 0, new["rating"] if new else 0)
-                if new
-                else 0,
+                "published_at": current["published_at"],
                 "status": status,
             }
             for metric in MODEL_METRICS:
-                row[f"old_{metric}"] = old[metric] if old else 0
-                row[f"new_{metric}"] = new[metric] if new else None
-                row[f"{metric}_delta"] = (
-                    _delta(old[metric] if old else 0, new[metric] if new else 0) if new else 0
+                row[f"old_{metric}"] = old[metric] if old else (
+                    None if metric == "collected_count" else 0
                 )
+                row[f"new_{metric}"] = new[metric] if new else None
+                if metric == "collected_count":
+                    row[f"{metric}_delta"] = (
+                        _optional_delta(old[metric] if old else None, new[metric]) if new else None
+                    )
+                else:
+                    row[f"{metric}_delta"] = (
+                        _delta(old[metric] if old else 0, new[metric] if new else 0) if new else 0
+                    )
             (missing_models if status == "missing_in_current" else models).append(row)
 
         models.sort(
             key=lambda row: (
                 row["download_count_delta"],
                 row["reaction_count_delta"],
-                row["favorite_count_delta"],
+                row["collected_count_delta"] or 0,
                 row["comment_count_delta"],
             ),
             reverse=True,
@@ -159,17 +168,10 @@ def compare_snapshots(from_id: int, to_id: int) -> dict:
                     )
                     if new
                     else 0,
-                    "old_rating_count": old["rating_count"] if old else 0,
-                    "new_rating_count": new["rating_count"] if new else None,
-                    "rating_count_delta": _delta(
-                        old["rating_count"] if old else 0, new["rating_count"] if new else 0
-                    )
-                    if new
-                    else 0,
                     "status": status,
                 }
             )
-        versions.sort(key=lambda row: (row["download_count_delta"], row["rating_count_delta"]), reverse=True)
+        versions.sort(key=lambda row: row["download_count_delta"], reverse=True)
 
     start = datetime.fromisoformat(old_account["checked_at"])
     end = datetime.fromisoformat(new_account["checked_at"])
@@ -186,7 +188,11 @@ def compare_snapshots(from_id: int, to_id: int) -> dict:
         ),
     }
     for metric in ACCOUNT_METRICS:
-        summary[f"{metric}_delta"] = _delta(old_account[metric], new_account[metric])
+        summary[f"{metric}_delta"] = (
+            _optional_delta(old_account[metric], new_account[metric])
+            if metric == "total_collected_count"
+            else _delta(old_account[metric], new_account[metric])
+        )
     return {
         "from_id": from_id,
         "to_id": to_id,
@@ -233,12 +239,13 @@ def compare_by_datetime(from_dt: str, to_dt: str, username: str | None = None) -
 
 
 def get_model_history(model_id: int) -> dict:
+    config = get_config()
     with create_connection() as connection:
         rows = dict_rows(
             connection.execute(
                 "SELECT s.checked_at, m.model_id, m.model_name, m.page_url, "
-                "m.latest_version_name, m.download_count, m.reaction_count, "
-                "m.favorite_count, m.comment_count FROM model_snapshot m "
+                "m.latest_version_name, m.cover_image_url, m.download_count, m.reaction_count, "
+                "m.collected_count, m.comment_count FROM model_snapshot m "
                 "JOIN snapshot s ON s.id = m.snapshot_id WHERE m.model_id = ? "
                 "ORDER BY s.checked_at ASC, s.id ASC",
                 (model_id,),
@@ -246,4 +253,6 @@ def get_model_history(model_id: int) -> dict:
         )
     if not rows:
         raise ValueError("Model history could not be found.")
+    for row in rows:
+        row["page_url"] = config.model_page_url(model_id)
     return {"model": rows[-1], "history": rows}

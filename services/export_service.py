@@ -20,15 +20,12 @@ def comparison_csv(from_id: int, to_id: int) -> tuple[str, str]:
         "old_reaction_count",
         "new_reaction_count",
         "reaction_count_delta",
-        "old_favorite_count",
-        "new_favorite_count",
-        "favorite_count_delta",
+        "old_collected_count",
+        "new_collected_count",
+        "collected_count_delta",
         "old_comment_count",
         "new_comment_count",
         "comment_count_delta",
-        "old_rating_count",
-        "new_rating_count",
-        "rating_count_delta",
     ]
     writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()

@@ -1,8 +1,9 @@
 from copy import deepcopy
 import json
+from urllib.parse import urlparse
 
 from .civitai_client import CivitaiClient, CivitaiError
-from .config import get_config
+from .config import build_model_page_url, get_config
 from .db import insert_sync_log, transaction, utc_now
 
 
@@ -13,11 +14,20 @@ def safe_int(value, default: int = 0) -> int:
         return default
 
 
-def safe_float(value, default: float = 0.0) -> float:
+def safe_optional_int(value) -> int | None:
+    if value is None:
+        return None
     try:
-        return float(value if value is not None else default)
+        return int(value)
     except (TypeError, ValueError):
-        return default
+        return None
+
+
+def clean_note(value) -> str | None:
+    note = str(value or "").strip()
+    if len(note) > 500:
+        raise ValueError("Snapshot note must be 500 characters or fewer.")
+    return note or None
 
 
 def deep_get(obj: dict, path: str, default=None):
@@ -52,11 +62,25 @@ def _reaction_count(stats: dict) -> int:
     )
 
 
+def _published_at(item: dict) -> str | None:
+    return item.get("publishedAt") or item.get("createdAt")
+
+
 def _latest_version(versions: list[dict]) -> dict:
     if not versions:
         return {}
-    dated = [version for version in versions if version.get("createdAt")]
-    return max(dated, key=lambda version: str(version["createdAt"])) if dated else versions[0]
+    dated = [version for version in versions if _published_at(version)]
+    return max(dated, key=lambda version: str(_published_at(version))) if dated else versions[0]
+
+
+def _cover_image_url(latest: dict, versions: list[dict]) -> str | None:
+    ordered_versions = [latest, *(version for version in versions if version is not latest)]
+    for version in ordered_versions:
+        for image in version.get("images") or []:
+            url = image.get("url") if isinstance(image, dict) else None
+            if isinstance(url, str) and urlparse(url).scheme in {"http", "https"}:
+                return url
+    return None
 
 
 def _trim_model_json(model: dict) -> str:
@@ -74,7 +98,7 @@ def _trim_version_json(version: dict) -> str:
     return json.dumps(trimmed, ensure_ascii=True, separators=(",", ":"))
 
 
-def _normalize_model(item: dict, snapshot_id: int) -> tuple[dict, list[dict]]:
+def _normalize_model(item: dict, snapshot_id: int, base_url: str) -> tuple[dict, list[dict]]:
     stats = item.get("stats") or {}
     versions = [value for value in item.get("modelVersions") or [] if isinstance(value, dict)]
     latest = _latest_version(versions)
@@ -87,17 +111,18 @@ def _normalize_model(item: dict, snapshot_id: int) -> tuple[dict, list[dict]]:
         "model_type": item.get("type"),
         "nsfw": int(bool(item.get("nsfw"))),
         "mode": item.get("mode"),
-        "page_url": f"https://civitai.com/models/{model_id}",
+        "page_url": build_model_page_url(base_url, model_id),
         "latest_version_id": safe_int(latest.get("id")) or None,
         "latest_version_name": latest.get("name"),
         "base_model": latest.get("baseModel"),
-        "published_at": item.get("publishedAt") or item.get("createdAt"),
+        "published_at": _published_at(item) or _published_at(latest),
+        "cover_image_url": _cover_image_url(latest, versions),
         "download_count": safe_int(_first_stat(stats, "downloadCount", "download_count")),
         "reaction_count": _reaction_count(stats),
-        "favorite_count": safe_int(_first_stat(stats, "favoriteCount", "favorite_count")),
+        "collected_count": safe_optional_int(
+            _first_stat(stats, "collectedCount", "collected_count", default=None)
+        ),
         "comment_count": safe_int(_first_stat(stats, "commentCount", "comment_count")),
-        "rating_count": safe_int(_first_stat(stats, "ratingCount", "rating_count")),
-        "rating": safe_float(_first_stat(stats, "rating")),
         "thumbs_up_count": safe_int(
             _first_stat(stats, "thumbsUpCount", "thumbs_up_count", "likeCount")
         ),
@@ -120,14 +145,10 @@ def _normalize_model(item: dict, snapshot_id: int) -> tuple[dict, list[dict]]:
                 "model_version_id": version_id,
                 "version_name": version.get("name"),
                 "base_model": version.get("baseModel"),
-                "published_at": version.get("publishedAt") or version.get("createdAt"),
+                "published_at": _published_at(version),
                 "download_count": safe_int(
                     _first_stat(version_stats, "downloadCount", "download_count")
                 ),
-                "rating_count": safe_int(
-                    _first_stat(version_stats, "ratingCount", "rating_count")
-                ),
-                "rating": safe_float(_first_stat(version_stats, "rating")),
                 "raw_json": _trim_version_json(version),
             }
         )
@@ -155,8 +176,9 @@ def _record_failed_snapshot(error: str, source: str) -> None:
         insert_sync_log("error", error, connection)
 
 
-def take_snapshot(source: str = "manual") -> dict:
+def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
     config = get_config()
+    note = clean_note(note)
     if not config.api_key:
         error = "API key is missing. Add CIVITAI_API_KEY to .env, restart the app, then try again."
         insert_sync_log("error", error)
@@ -169,7 +191,8 @@ def take_snapshot(source: str = "manual") -> dict:
     client = CivitaiClient(config)
     warnings: list[str] = []
     try:
-        models, info = client.fetch_models(config.username, config.model_types)
+        models, info, fetch_warnings = client.fetch_models(config.username, config.model_types)
+        warnings.extend(fetch_warnings)
     except CivitaiError as exc:
         error = str(exc)
         _record_failed_snapshot(error, source)
@@ -191,14 +214,15 @@ def take_snapshot(source: str = "manual") -> dict:
     with transaction() as connection:
         cursor = connection.execute(
             "INSERT INTO snapshot "
-            "(checked_at, username, source, model_type_filter, api_ok, raw_total_item, created_at) "
-            "VALUES (?, ?, ?, ?, 1, ?, ?)",
+            "(checked_at, username, source, model_type_filter, api_ok, raw_total_item, note, created_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
             (
                 checked_at,
                 config.username,
                 source,
                 config.model_type_filter,
                 len(models),
+                note,
                 checked_at,
             ),
         )
@@ -206,7 +230,7 @@ def take_snapshot(source: str = "manual") -> dict:
         normalized_models = []
         version_rows = []
         for item in models:
-            model_row, rows = _normalize_model(item, snapshot_id)
+            model_row, rows = _normalize_model(item, snapshot_id, config.base_url)
             if model_row["model_id"]:
                 normalized_models.append(model_row)
                 version_rows.extend(rows)
@@ -215,9 +239,12 @@ def take_snapshot(source: str = "manual") -> dict:
             "follower_count": follower_count,
             "total_download_count": sum(row["download_count"] for row in normalized_models),
             "total_reaction_count": sum(row["reaction_count"] for row in normalized_models),
-            "total_favorite_count": sum(row["favorite_count"] for row in normalized_models),
+            "total_collected_count": (
+                sum(row["collected_count"] for row in normalized_models)
+                if all(row["collected_count"] is not None for row in normalized_models)
+                else None
+            ),
             "total_comment_count": sum(row["comment_count"] for row in normalized_models),
-            "total_rating_count": sum(row["rating_count"] for row in normalized_models),
             "total_thumbs_up_count": sum(row["thumbs_up_count"] for row in normalized_models),
             "total_thumbs_down_count": sum(row["thumbs_down_count"] for row in normalized_models),
         }
@@ -248,4 +275,35 @@ def take_snapshot(source: str = "manual") -> dict:
         "snapshot_id": snapshot_id,
         "checked_at": checked_at,
         "summary": summary,
+    }
+
+
+def delete_snapshot(snapshot_id: int) -> dict:
+    config = get_config()
+    with transaction() as connection:
+        snapshot = connection.execute(
+            "SELECT id FROM snapshot WHERE id = ? AND username = ? AND api_ok = 1",
+            (snapshot_id, config.username),
+        ).fetchone()
+        if not snapshot:
+            raise ValueError("Snapshot could not be found.")
+        deleted_versions = connection.execute(
+            "DELETE FROM model_version_snapshot WHERE snapshot_id = ?", (snapshot_id,)
+        ).rowcount
+        deleted_models = connection.execute(
+            "DELETE FROM model_snapshot WHERE snapshot_id = ?", (snapshot_id,)
+        ).rowcount
+        connection.execute("DELETE FROM account_snapshot WHERE snapshot_id = ?", (snapshot_id,))
+        connection.execute("DELETE FROM snapshot WHERE id = ?", (snapshot_id,))
+        insert_sync_log(
+            "info",
+            f"Snapshot {snapshot_id} deleted: {deleted_models} models and "
+            f"{deleted_versions} versions removed.",
+            connection,
+        )
+    return {
+        "ok": True,
+        "snapshot_id": snapshot_id,
+        "deleted_models": deleted_models,
+        "deleted_versions": deleted_versions,
     }

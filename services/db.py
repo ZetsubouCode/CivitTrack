@@ -5,6 +5,14 @@ import sqlite3
 from .config import get_config
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshot (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15,6 +23,7 @@ CREATE TABLE IF NOT EXISTS snapshot (
     api_ok INTEGER NOT NULL DEFAULT 1,
     error TEXT,
     raw_total_item INTEGER,
+    note TEXT,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS account_snapshot (
@@ -26,6 +35,7 @@ CREATE TABLE IF NOT EXISTS account_snapshot (
     total_download_count INTEGER DEFAULT 0,
     total_reaction_count INTEGER DEFAULT 0,
     total_favorite_count INTEGER DEFAULT 0,
+    total_collected_count INTEGER NULL,
     total_comment_count INTEGER DEFAULT 0,
     total_rating_count INTEGER DEFAULT 0,
     total_thumbs_up_count INTEGER DEFAULT 0,
@@ -45,9 +55,11 @@ CREATE TABLE IF NOT EXISTS model_snapshot (
     latest_version_name TEXT,
     base_model TEXT,
     published_at TEXT,
+    cover_image_url TEXT,
     download_count INTEGER DEFAULT 0,
     reaction_count INTEGER DEFAULT 0,
     favorite_count INTEGER DEFAULT 0,
+    collected_count INTEGER NULL,
     comment_count INTEGER DEFAULT 0,
     rating_count INTEGER DEFAULT 0,
     rating REAL DEFAULT 0,
@@ -93,7 +105,7 @@ def utc_now() -> str:
 def create_connection() -> sqlite3.Connection:
     config = get_config()
     config.db_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(config.db_path)
+    connection = sqlite3.connect(config.db_path, factory=ClosingConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
@@ -102,6 +114,25 @@ def create_connection() -> sqlite3.Connection:
 def init_db() -> None:
     with create_connection() as connection:
         connection.executescript(SCHEMA)
+        model_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(model_snapshot)")
+        }
+        if "cover_image_url" not in model_columns:
+            connection.execute("ALTER TABLE model_snapshot ADD COLUMN cover_image_url TEXT")
+        if "collected_count" not in model_columns:
+            connection.execute("ALTER TABLE model_snapshot ADD COLUMN collected_count INTEGER NULL")
+        account_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(account_snapshot)")
+        }
+        if "total_collected_count" not in account_columns:
+            connection.execute(
+                "ALTER TABLE account_snapshot ADD COLUMN total_collected_count INTEGER NULL"
+            )
+        snapshot_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(snapshot)")
+        }
+        if "note" not in snapshot_columns:
+            connection.execute("ALTER TABLE snapshot ADD COLUMN note TEXT")
 
 
 def dict_rows(cursor: sqlite3.Cursor) -> list[dict]:

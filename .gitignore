@@ -51,6 +51,15 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# ToDo list
+todo/
+
+# CivitTrack local analytics data
+storage/*.sqlite
+storage/*.sqlite-journal
+storage/*.sqlite-shm
+storage/*.sqlite-wal
+
 # Translations
 *.mo
 *.pot

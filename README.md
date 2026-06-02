@@ -94,36 +94,63 @@ python app.py
 
 Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
-Click **Take Snapshot** to store the first snapshot. Choose a note type and optionally add a local note to record context such as a preview-image change or a newly published version. If the previous snapshot is less than five minutes old, the dashboard warns before continuing. After a successful capture, CivitTrack automatically compares it with the previous snapshot when available. The comparison card also provides **1 Day**, **7 Days**, and **30 Days** shortcuts using the nearest available historical snapshot on or before each target period.
+## Dashboard Menu Guide
 
-Use the floating navigation tabs to switch between six focused sections:
+Use the floating navigation tabs on the left side of the dashboard to switch between six focused sections. Dashboard dates use `DD/MM/YYYY`; snapshot and log timestamps keep the local `HH:mm` time after the date. The screenshots below contain example local data for illustration.
 
-- **Overview** keeps snapshot capture and comparison controls beside growth analytics.
-- **Models** expands the latest account totals into a searchable model portfolio. Switch between **Downloads**, **Reactions**, and **Collections** to rank each total, or sort models by newest and oldest publication date.
-- **Buzz** optionally stores recent Blue, Yellow, and Green Buzz activity and shows the source when CivitAI returns enough information to match it confidently.
-- **Snapshots** lists stored history, note types, source labels, data-quality badges, sync activity, and a confirmed delete action for removing an unwanted snapshot and its related records.
-- **Alerts** stores a local inbox of actionable snapshot notifications with unread tracking and links back to affected CivitAI models.
-- **Settings** shows a first-run checklist, edits local `.env` configuration with per-field tooltips, configures local alerts, explains snapshot sources, and keeps backup and restore controls together.
+### Overview
 
-The **Model Growth** comparison defaults to newest models first. Use its sort controls to switch to oldest models or rank by download and reaction growth. After comparing snapshots, **Top Movers** highlights the strongest download, collection, and reaction gains plus the top newly detected model by downloads. **Version Growth** shows how much each version contributed to its model's download change.
+**Overview** is the main workspace. Click **Take Snapshot** to save the current CivitAI statistics locally. Choose a note type and optionally add local context such as a preview-image change or newly published version. If the previous snapshot is less than five minutes old, the dashboard warns before continuing.
 
-The displayed **Published** date uses the newest available model-version publication or creation date returned by CivitAI.
+After a successful capture, CivitTrack automatically compares it with the previous snapshot when available. Click **Compare Latest** to repeat that comparison, or use the snapshot selectors and **1 Day**, **7 Days**, and **30 Days** shortcuts for a different range. Period shortcuts use the nearest available historical snapshot on or before the target period. The summary cards show the selected snapshot totals and, after a comparison, their changes. CSV export becomes available after selecting a comparison.
 
-Dashboard dates use `DD/MM/YYYY`. Snapshot and log timestamps keep the local `HH:mm` time after the date. Clicking a model row opens Stored Timeline with its remote CivitAI cover image when available; CivitTrack does not download that image into local storage.
+![Overview menu with snapshot controls and account totals](docs/images/overview.png)
 
-CSV export becomes available after selecting a comparison.
+After a comparison, **Top Movers** highlights the strongest download, collection, and reaction gains plus the top newly detected model by downloads. **Model Growth** lists the affected models and defaults to newest models first. Use its search, metric filters, unchanged-model checkbox, and sort controls to narrow the results. The collapsible **Version Growth** table shows how much each version contributed to its model's download change.
 
-After each successful snapshot, CivitTrack checks the previous local history and adds configurable inbox alerts for newly detected or missing models, newly detected versions, crossed model download milestones, meaningful growth and download-velocity spikes, on-site generation support changes, and snapshot warnings. Failed snapshot attempts can also create local alerts. The first successful snapshot establishes a baseline without producing an alert for every existing model.
+![Overview model growth comparison](docs/images/overview-model-growth.png)
 
-Each new snapshot stores a structured quality report. A **Partial** snapshot is still useful: it means downloads and reactions were saved, but extra CivitAI data such as collections, creator profile stats, or minor-model discovery may be incomplete. Older snapshots continue to work and show an unavailable quality report.
+### Models
 
-Settings includes local SQLite backup and restore controls. Download a backup before major changes. Restore validates the uploaded SQLite file before replacing the active database and keeps an automatic pre-restore safety copy under `storage/backups/`.
+**Models** shows the current model portfolio from the latest snapshot. Switch between **Downloads**, **Reactions**, and **Collections** to rank models by a total. Use **Top first**, **Newest**, or **Oldest** to change the order, and use search to find a model by name. The **Share** column shows how much each model contributes to the selected account total. The displayed **Published** date uses the newest available model-version publication or creation date returned by CivitAI.
 
-## Buzz Tracker
+![Models menu with the latest model portfolio](docs/images/models.png)
 
-Buzz tracking is optional and experimental. Enable it from **Settings**, choose which Blue, Yellow, and Green Buzz account types to track, then run a check from the **Buzz** page or CLI.
+Click a model row to open its **Stored Timeline**. The drawer shows its remote CivitAI cover image when available, a link to its CivitAI page, and the locally stored statistics for each snapshot. CivitTrack does not download the cover image into local storage.
 
-CivitTrack stores recent Buzz transactions locally and tries to match activity to models or images when CivitAI returns enough data. Some events will remain **Unknown source** because the authenticated CivitAI Buzz endpoints do not always expose a clear model or image relationship. Normal model snapshot tracking continues to work if Buzz tracking is unavailable or the endpoint changes.
+![Stored timeline drawer for a model](docs/images/models-stored-timeline.png)
+
+### Buzz
+
+**Buzz** is an optional experimental tracker for Blue, Yellow, and Green Buzz activity. Enable it from **Settings**, select the account types to track, and click **Run Buzz Check** or run `python cli.py buzz-check`. The page shows endpoint availability, recent balances, and how many new transactions were found.
+
+![Buzz Tracker menu with balances and endpoint status](docs/images/buzz.png)
+
+The **Buzz Activity** table can be filtered by account, event type, and direction. Search by source or description to investigate a transaction. CivitTrack links a transaction to a model or image only when the CivitAI response contains enough information; unknown sources are normal. Normal model snapshot tracking continues to work if Buzz tracking is unavailable or the endpoint changes.
+
+![Buzz activity filters and stored transactions](docs/images/buzz-activity.png)
+
+### Snapshots
+
+**Snapshots** lists the stored history used for comparisons. Each row shows when the capture ran, its note, source, quality status, and account totals. Use **Details** to inspect the saved quality report. A **Partial** snapshot still contains usable downloads and reactions, but extra CivitAI data such as collections, creator profile stats, or minor-model discovery may be incomplete. Older snapshots continue to work and show an unavailable quality report. Use **Delete** to remove an unwanted snapshot and its related records after confirmation. **Sync Logs** below the table show local snapshot activity and warnings.
+
+![Snapshots menu with saved history and sync logs](docs/images/snapshots.png)
+
+### Alerts
+
+**Alerts** is a local inbox for actionable snapshot notifications. Alerts can report newly detected or missing models, new versions, milestones, growth changes, download-velocity spikes, generation-support changes, snapshot warnings, and failed snapshot attempts. The first successful snapshot establishes a baseline without producing an alert for every existing model. Open a linked model on CivitAI when a remote link is available, or use **Mark all read** to clear the unread badge.
+
+![Alerts inbox with a newly detected model](docs/images/alerts.png)
+
+### Settings
+
+**Settings** starts with a first-run checklist and the local application configuration editor. Update the CivitAI username, API key, database path, model filters, and server settings here. Secret fields stay masked and are replaced only when you explicitly enter a new value.
+
+![Settings menu with setup checklist and application settings](docs/images/settings.png)
+
+Further down, **Settings** configures Buzz tracking and local alert preferences. Advanced alert thresholds tune when notifications appear. The same page explains snapshot sources and includes SQLite backup and restore controls. Restore validates the uploaded SQLite file before replacing the active database and keeps an automatic pre-restore safety copy under `storage/backups/`.
+
+![Settings menu with alert preferences and data tools](docs/images/settings-alerts-backup.png)
 
 ## CLI
 

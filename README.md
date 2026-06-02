@@ -96,10 +96,11 @@ Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
 Click **Take Snapshot** to store the first snapshot. Choose a note type and optionally add a local note to record context such as a preview-image change or a newly published version. If the previous snapshot is less than five minutes old, the dashboard warns before continuing. After a successful capture, CivitTrack automatically compares it with the previous snapshot when available. The comparison card also provides **1 Day**, **7 Days**, and **30 Days** shortcuts using the nearest available historical snapshot on or before each target period.
 
-Use the floating navigation tabs to switch between five focused sections:
+Use the floating navigation tabs to switch between six focused sections:
 
 - **Overview** keeps snapshot capture and comparison controls beside growth analytics.
 - **Models** expands the latest account totals into a searchable model portfolio. Switch between **Downloads**, **Reactions**, and **Collections** to rank each total, or sort models by newest and oldest publication date.
+- **Buzz** optionally stores recent Blue, Yellow, and Green Buzz activity and shows the source when CivitAI returns enough information to match it confidently.
 - **Snapshots** lists stored history, note types, source labels, data-quality badges, sync activity, and a confirmed delete action for removing an unwanted snapshot and its related records.
 - **Alerts** stores a local inbox of actionable snapshot notifications with unread tracking and links back to affected CivitAI models.
 - **Settings** shows a first-run checklist, edits local `.env` configuration with per-field tooltips, configures local alerts, explains snapshot sources, and keeps backup and restore controls together.
@@ -118,6 +119,12 @@ Each new snapshot stores a structured quality report. A **Partial** snapshot is 
 
 Settings includes local SQLite backup and restore controls. Download a backup before major changes. Restore validates the uploaded SQLite file before replacing the active database and keeps an automatic pre-restore safety copy under `storage/backups/`.
 
+## Buzz Tracker
+
+Buzz tracking is optional and experimental. Enable it from **Settings**, choose which Blue, Yellow, and Green Buzz account types to track, then run a check from the **Buzz** page or CLI.
+
+CivitTrack stores recent Buzz transactions locally and tries to match activity to models or images when CivitAI returns enough data. Some events will remain **Unknown source** because the authenticated CivitAI Buzz endpoints do not always expose a clear model or image relationship. Normal model snapshot tracking continues to work if Buzz tracking is unavailable or the endpoint changes.
+
 ## CLI
 
 The CLI supports local manual runs and future scheduled snapshots:
@@ -126,6 +133,7 @@ The CLI supports local manual runs and future scheduled snapshots:
 python cli.py snapshot
 python cli.py compare-latest
 python cli.py list-snapshots
+python cli.py buzz-check
 ```
 
 Commands return exit code `0` on success and `1` on failure.

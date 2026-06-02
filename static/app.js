@@ -6,6 +6,12 @@ const state = {
   alerts: [],
   unreadAlertCount: 0,
   alertSettings: null,
+  buzzStatus: null,
+  buzzSettings: null,
+  buzzTransactions: [],
+  buzzAccountFilter: "all",
+  buzzCategoryFilter: "all",
+  buzzDirectionFilter: "all",
   latestBreakdown: null,
   breakdownMetric: "download_count",
   breakdownSort: "metric",
@@ -64,7 +70,7 @@ function compareDates(a, b, direction) {
 }
 
 function setView(view, updateHash = true) {
-  const views = ["overview", "models", "snapshots", "alerts", "settings"];
+  const views = ["overview", "models", "buzz", "snapshots", "alerts", "settings"];
   const nextView = views.includes(view) ? view : "overview";
   state.currentView = nextView;
   $$("[data-view-panel]").forEach((panel) => panel.classList.toggle("d-none", panel.dataset.viewPanel !== nextView));
@@ -155,6 +161,88 @@ function renderSettings() {
     checkbox.checked = false;
     $(`#settingsForm [name="${checkbox.dataset.clearSecret}"]`).disabled = false;
   });
+}
+
+const buzzEventLabel = (value) => ({
+  model_collection: "Model collection",
+  model_reaction: "Model reaction",
+  image_collection: "Image collection",
+  image_reaction: "Image reaction",
+  tip_received: "Tip received",
+  tip_sent: "Tip sent",
+  reward: "Reward",
+  purchase: "Purchase",
+  generation_spend: "Generation spend",
+  training_spend: "Training spend",
+  other_gain: "Other gain",
+  other_spend: "Other spend",
+  unknown: "Unknown",
+}[value] || "Unknown");
+const buzzAccountPill = (value) => `<span class="ct-buzz-account ct-buzz-${esc(String(value || "unknown").toLowerCase())}">${esc(value || "Unknown")}</span>`;
+const buzzSource = (row) => row.model_name || (row.image_id ? `Image #${row.image_id}` : row.username || "Unknown source");
+const buzzCategoryMatch = (row, filter) => filter === "all"
+  || (filter === "model" && row.event_category.startsWith("model_"))
+  || (filter === "image" && row.event_category.startsWith("image_"))
+  || (filter === "tip" && row.event_category.startsWith("tip_"))
+  || (filter === "reward" && row.event_category === "reward")
+  || (filter === "spend" && ["purchase", "generation_spend", "training_spend", "other_spend"].includes(row.event_category))
+  || (filter === "unknown" && row.event_category === "unknown");
+
+function renderBuzzSettings() {
+  const settings = state.buzzSettings;
+  if (!settings) return;
+  $("#buzzTrackingEnabled").checked = settings.enabled;
+  $("#buzzTrackBlue").checked = settings.account_types.Blue;
+  $("#buzzTrackYellow").checked = settings.account_types.Yellow;
+  $("#buzzTrackGreen").checked = settings.account_types.Green;
+  $("#buzzTransactionLimit").value = settings.transaction_limit;
+}
+
+function renderBuzz() {
+  const summary = state.buzzStatus;
+  const latest = summary?.latest_check;
+  const available = summary?.endpoint_available;
+  $("#buzzStatusPill").className = `ct-pill ${available === true ? "ct-pill-success" : available === false ? "ct-pill-warning" : "ct-pill-muted"}`;
+  $("#buzzStatusPill").textContent = available === true
+    ? (latest.quality_status === "partial" ? "Partial" : "Buzz API Ready")
+    : available === false ? "Unavailable" : "Not checked";
+  $("#buzzStatusHelp").textContent = summary?.warning
+    || (latest ? `Last Buzz check ${dateFmt(latest.checked_at)}. ${fmt(summary.new_transaction_count)} new stored transaction${summary.new_transaction_count === 1 ? "" : "s"} found.` : "Enable Buzz tracking in Settings, then run a check.");
+  const balances = Object.fromEntries((summary?.latest_balances || []).map((row) => [row.account_type, row]));
+  const accountCards = (summary?.selected_account_types || []).map((accountType) => {
+    const row = balances[accountType] || {};
+    return `<article class="ct-card ct-metric">
+      <span class="ct-metric-label">${esc(accountType)} Buzz balance</span>
+      <strong class="ct-metric-value">${fmt(row.balance)}</strong>
+      <span class="ct-metric-delta"><span class="ct-positive">+${fmt(row.gained_recent || 0)}</span> gained, <span class="ct-negative">-${fmt(row.spent_recent || 0)}</span> spent in fetched activity</span>
+    </article>`;
+  });
+  accountCards.push(`<article class="ct-card ct-metric"><span class="ct-metric-label">New transactions</span><strong class="ct-metric-value">${fmt(summary?.new_transaction_count || 0)}</strong><span class="ct-metric-delta">Found in the latest Buzz check</span></article>`);
+  $("#buzzMetricsGrid").innerHTML = accountCards.join("");
+  renderBuzzTransactions();
+}
+
+function renderBuzzTransactions() {
+  const query = $("#buzzSearch").value.trim().toLowerCase();
+  const rows = state.buzzTransactions
+    .filter((row) => state.buzzAccountFilter === "all" || row.account_type === state.buzzAccountFilter)
+    .filter((row) => state.buzzDirectionFilter === "all" || row.direction === state.buzzDirectionFilter)
+    .filter((row) => buzzCategoryMatch(row, state.buzzCategoryFilter))
+    .filter((row) => !query || [row.description, row.model_name, row.image_id, row.username].some((value) => String(value || "").toLowerCase().includes(query)));
+  $("#buzzRows").innerHTML = rows.length ? rows.map((row) => {
+    const link = row.model_url || row.image_page_url || row.image_url;
+    return `<tr data-buzz-id="${row.id}">
+      <td>${esc(dateFmt(row.transaction_date || row.first_seen_at))}</td>
+      <td><span class="ct-delta ${deltaClass(row.amount)}">${signed(row.amount)}</span></td>
+      <td>${buzzAccountPill(row.account_type)}</td>
+      <td>${esc(buzzEventLabel(row.event_category))}</td>
+      <td>${esc(buzzSource(row))}</td>
+      <td>${esc(row.description || row.title || "Unmatched Buzz event.")}</td>
+      <td><span class="ct-status">${esc(qualityLabel(row.match_confidence))}</span></td>
+      <td>${link ? `<a href="${esc(link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" aria-label="Open remote source"><i class="bi bi-box-arrow-up-right"></i></a>` : "-"}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="8" class="ct-table-empty">No stored Buzz activity matches these filters. Unknown events will appear here when CivitAI returns them.</td></tr>`;
+  $$("#buzzRows tr[data-buzz-id]").forEach((row) => row.addEventListener("click", () => showBuzzDetail(row.dataset.buzzId)));
 }
 
 const metricSpec = [
@@ -398,7 +486,7 @@ function clearComparison() {
 }
 
 async function refresh() {
-  const [status, settings, snapshots, breakdown, logs, alerts, alertSettings] = await Promise.all([api("/api/status"), api("/api/settings"), api("/api/snapshots"), api("/api/latest-breakdown"), api("/api/logs"), api("/api/alerts"), api("/api/alert-settings")]);
+  const [status, settings, snapshots, breakdown, logs, alerts, alertSettings, buzzStatus, buzzSettings, buzzTransactions] = await Promise.all([api("/api/status"), api("/api/settings"), api("/api/snapshots"), api("/api/latest-breakdown"), api("/api/logs"), api("/api/alerts"), api("/api/alert-settings"), api("/api/buzz/status"), api("/api/buzz-settings"), api("/api/buzz/transactions")]);
   state.status = status;
   state.settings = settings;
   state.snapshots = snapshots.snapshots;
@@ -406,6 +494,9 @@ async function refresh() {
   state.alerts = alerts.alerts;
   state.unreadAlertCount = alerts.unread_count;
   state.alertSettings = alertSettings;
+  state.buzzStatus = buzzStatus;
+  state.buzzSettings = buzzSettings;
+  state.buzzTransactions = buzzTransactions.transactions;
   renderStatus();
   renderSettings();
   renderSnapshots();
@@ -414,6 +505,8 @@ async function refresh() {
   renderLogs(logs.logs);
   renderAlerts();
   renderAlertSettings();
+  renderBuzzSettings();
+  renderBuzz();
 }
 
 function renderLogs(logs) {
@@ -460,6 +553,10 @@ function renderAlertSettings() {
     download_velocity_spike: "Download velocity spike",
     snapshot_warning: "Snapshot warning",
     snapshot_failed: "Snapshot failed",
+    buzz_unavailable: "Buzz tracking unavailable",
+    buzz_tip: "Buzz tip received",
+    buzz_large_gain: "Large Buzz gain",
+    buzz_large_spend: "Large Buzz spend",
   };
   $("#alertToggleGrid").innerHTML = Object.entries(labels).map(([key, label]) => `
     <label class="ct-toggle-row"><span>${esc(label)}</span><input type="checkbox" data-alert-toggle="${key}" ${settings.enabled[key] ? "checked" : ""}></label>`).join("");
@@ -469,6 +566,8 @@ function renderAlertSettings() {
   $("#alertVelocityMultiplier").value = settings.velocity_spike_multiplier;
   $("#alertVelocityCurrent").value = settings.velocity_minimum_current_delta;
   $("#alertVelocityPrevious").value = settings.velocity_minimum_previous_delta;
+  $("#alertBuzzLargeGain").value = settings.buzz_large_gain_threshold;
+  $("#alertBuzzLargeSpend").value = settings.buzz_large_spend_threshold;
 }
 
 function openSnapshotModal() {
@@ -533,11 +632,55 @@ async function saveAlertSettings(event) {
         velocity_spike_multiplier: $("#alertVelocityMultiplier").value,
         velocity_minimum_current_delta: $("#alertVelocityCurrent").value,
         velocity_minimum_previous_delta: $("#alertVelocityPrevious").value,
+        buzz_large_gain_threshold: $("#alertBuzzLargeGain").value,
+        buzz_large_spend_threshold: $("#alertBuzzLargeSpend").value,
       }),
     });
     state.alertSettings = result.settings;
     renderAlertSettings();
     toast("Alert preferences saved.");
+  } catch (error) { toast(error.message, "error"); }
+  finally { busy(button, false); }
+}
+
+async function runBuzzCheck(event) {
+  const buttons = $$(".js-buzz-check");
+  buttons.forEach((button) => busy(button, true, "Checking Buzz..."));
+  try {
+    const result = await api("/api/buzz/check", { method: "POST" });
+    await refresh();
+    setView("buzz");
+    toast(`Buzz check saved. ${fmt(result.new_transaction_count)} new transaction${result.new_transaction_count === 1 ? "" : "s"} found.${result.warnings.length ? " Some data was unavailable." : ""}`, result.warnings.length ? "warning" : "info");
+  } catch (error) {
+    toast(error.message, "error");
+    await Promise.all([loadBuzz(), loadLogs(), loadAlerts()]);
+  } finally {
+    buttons.forEach((button) => busy(button, false));
+  }
+}
+
+async function saveBuzzSettings(event) {
+  event.preventDefault();
+  const button = $("#saveBuzzSettings");
+  busy(button, true, "Saving...");
+  try {
+    const result = await api("/api/buzz-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: $("#buzzTrackingEnabled").checked,
+        account_types: {
+          Blue: $("#buzzTrackBlue").checked,
+          Yellow: $("#buzzTrackYellow").checked,
+          Green: $("#buzzTrackGreen").checked,
+        },
+        transaction_limit: $("#buzzTransactionLimit").value,
+      }),
+    });
+    state.buzzSettings = result.settings;
+    await loadBuzz();
+    renderBuzzSettings();
+    toast("Buzz settings saved.");
   } catch (error) { toast(error.message, "error"); }
   finally { busy(button, false); }
 }
@@ -623,6 +766,13 @@ async function loadAlerts() {
   renderAlerts();
 }
 
+async function loadBuzz() {
+  const [status, transactions] = await Promise.all([api("/api/buzz/status"), api("/api/buzz/transactions")]);
+  state.buzzStatus = status;
+  state.buzzTransactions = transactions.transactions;
+  renderBuzz();
+}
+
 async function compare(url, button) {
   busy(button, true, "Comparing...");
   try { renderComparison(await api(url)); setView("overview"); }
@@ -702,6 +852,47 @@ async function showHistory(modelId) {
   } catch (error) { toast(error.message, "error"); }
 }
 
+async function showBuzzDetail(transactionId) {
+  try {
+    const detail = await api(`/api/buzz/transaction-detail?id=${encodeURIComponent(transactionId)}`);
+    const raw = JSON.stringify(detail.raw_json || {}, null, 2);
+    const source = detail.model_id ? `
+      ${detail.related_model?.cover_image_url ? `<img class="ct-history-cover" src="${esc(detail.related_model.cover_image_url)}" alt="${esc(detail.model_name || "Model")} cover image" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true">` : ""}
+      <div class="ct-quality-detail">
+        <div><span>Model</span><strong>${esc(detail.model_name || `Model #${detail.model_id}`)}</strong></div>
+        <div><span>Model ID</span><strong>${fmt(detail.model_id)}</strong></div>
+        <div><span>Latest version</span><strong>${esc(detail.related_model?.latest_version_name || "Unavailable")}</strong></div>
+      </div>
+      ${detail.model_url ? `<a class="btn ct-btn-secondary mb-3" href="${esc(detail.model_url)}" target="_blank" rel="noopener">Open model on CivitAI <i class="bi bi-box-arrow-up-right"></i></a>` : ""}`
+      : detail.image_id ? `
+      ${detail.image_url ? `<img class="ct-history-cover" src="${esc(detail.image_url)}" alt="Remote CivitAI image preview" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true">` : ""}
+      <div class="ct-quality-detail">
+        <div><span>Image ID</span><strong>${fmt(detail.image_id)}</strong></div>
+        <div><span>Post ID</span><strong>${fmt(detail.post_id)}</strong></div>
+      </div>
+      ${detail.image_page_url || detail.image_url ? `<a class="btn ct-btn-secondary mb-3" href="${esc(detail.image_page_url || detail.image_url)}" target="_blank" rel="noopener">Open image on CivitAI <i class="bi bi-box-arrow-up-right"></i></a>` : ""}`
+      : `<p class="ct-quality-summary">CivitTrack could not confidently match this Buzz event to a model or image. The raw description is still stored below.</p>`;
+    $("#buzzDrawerBody").innerHTML = `
+      <div class="ct-quality-grid">
+        <div><span>Buzz amount</span><strong class="${deltaClass(detail.amount)}">${signed(detail.amount)}</strong></div>
+        <div><span>Account</span><strong>${buzzAccountPill(detail.account_type)}</strong></div>
+        <div><span>Date</span><strong>${esc(dateFmt(detail.transaction_date || detail.first_seen_at))}</strong></div>
+        <div><span>Event</span><strong>${esc(buzzEventLabel(detail.event_category))}</strong></div>
+        <div><span>Transaction type</span><strong>${esc(detail.transaction_type || "Unknown")}</strong></div>
+        <div><span>Match confidence</span><strong>${esc(qualityLabel(detail.match_confidence))}</strong></div>
+      </div>
+      <p class="ct-quality-summary">${esc(detail.description || detail.title || "Unmatched Buzz event.")}</p>
+      ${source}
+      ${detail.username ? `<p class="ct-quality-summary"><strong>User:</strong> ${esc(detail.username)}</p>` : ""}
+      <details class="ct-advanced"><summary>Raw sanitized details</summary><button id="copyBuzzRaw" class="btn ct-btn-quiet my-3" type="button"><i class="bi bi-copy"></i> Copy raw JSON</button><pre class="ct-raw-json">${esc(raw)}</pre></details>`;
+    $("#copyBuzzRaw").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(raw); toast("Raw Buzz JSON copied."); }
+      catch (_) { toast("Could not copy raw JSON from this browser.", "warning"); }
+    });
+    bootstrap.Offcanvas.getOrCreateInstance($("#buzzDrawer")).show();
+  } catch (error) { toast(error.message, "error"); }
+}
+
 $$(".js-snapshot").forEach((button) => button.addEventListener("click", openSnapshotModal));
 $$(".js-compare-latest").forEach((button) => button.addEventListener("click", (event) => compare("/api/compare-latest", event.currentTarget)));
 $$(".js-compare-range").forEach((button) => button.addEventListener("click", compareRange));
@@ -709,6 +900,7 @@ $$(".ct-side-tab").forEach((button) => button.addEventListener("click", () => se
 $("#snapshotForm").addEventListener("submit", takeSnapshot);
 $("#settingsForm").addEventListener("submit", saveSettings);
 $("#alertSettingsForm").addEventListener("submit", saveAlertSettings);
+$("#buzzSettingsForm").addEventListener("submit", saveBuzzSettings);
 $("#restoreForm").addEventListener("submit", restoreDatabase);
 $("#markAllAlertsRead").addEventListener("click", markAllAlertsRead);
 $("#compareSelected").addEventListener("click", (event) => compare(`/api/compare?from_id=${$("#fromSnapshot").value}&to_id=${$("#toSnapshot").value}`, event.currentTarget));
@@ -721,6 +913,24 @@ $("#compareDate").addEventListener("click", (event) => {
 });
 $("#modelSearch").addEventListener("input", renderModels);
 $("#breakdownSearch").addEventListener("input", renderBreakdown);
+$("#buzzSearch").addEventListener("input", renderBuzzTransactions);
+$$(".js-buzz-check").forEach((button) => button.addEventListener("click", runBuzzCheck));
+$("#openBuzzSettings").addEventListener("click", () => {
+  setView("settings");
+  setTimeout(() => $("#buzzSettingsCard").scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+});
+[
+  ["#buzzAccountFilters", "buzzAccount", "buzzAccountFilter"],
+  ["#buzzCategoryFilters", "buzzCategory", "buzzCategoryFilter"],
+  ["#buzzDirectionFilters", "buzzDirection", "buzzDirectionFilter"],
+].forEach(([selector, datasetKey, stateKey]) => $(selector).addEventListener("click", (event) => {
+  const value = event.target.dataset[datasetKey];
+  if (!value) return;
+  $$(`${selector} .ct-filter`).forEach((button) => button.classList.remove("active"));
+  event.target.classList.add("active");
+  state[stateKey] = value;
+  renderBuzzTransactions();
+}));
 $("#breakdownFilters").addEventListener("click", (event) => {
   if (!event.target.dataset.breakdownMetric) return;
   $$("#breakdownFilters .ct-filter").forEach((button) => button.classList.remove("active"));
@@ -761,7 +971,7 @@ $$('[data-bs-toggle="tooltip"]').forEach((element) => bootstrap.Tooltip.getOrCre
 function viewFromHash() {
   const hash = location.hash.slice(1);
   if (hash === "snapshot-manager") return "snapshots";
-  return ["overview", "models", "snapshots", "alerts", "settings"].includes(hash) ? hash : "overview";
+  return ["overview", "models", "buzz", "snapshots", "alerts", "settings"].includes(hash) ? hash : "overview";
 }
 
 window.addEventListener("hashchange", () => setView(viewFromHash(), false));

@@ -35,6 +35,10 @@ def build_model_page_url(base_url: str, model_id: int) -> str:
     return f"{base_url.rstrip('/')}/models/{model_id}"
 
 
+def build_image_page_url(base_url: str, image_id: int) -> str:
+    return f"{base_url.rstrip('/')}/images/{image_id}"
+
+
 def _int_env(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -199,6 +203,9 @@ class Config:
 
     def model_page_url(self, model_id: int) -> str:
         return build_model_page_url(self.base_url, model_id)
+
+    def image_page_url(self, image_id: int) -> str:
+        return build_image_page_url(self.base_url, image_id)
 
 
 def get_config() -> Config:

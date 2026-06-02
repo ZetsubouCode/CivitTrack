@@ -25,6 +25,10 @@
     <i class="bi bi-boxes"></i>
     <span>Models</span>
   </button>
+  <button class="ct-side-tab" type="button" data-view="buzz" aria-controls="buzzView" aria-selected="false" title="Buzz">
+    <i class="bi bi-lightning-charge-fill"></i>
+    <span>Buzz</span>
+  </button>
   <button class="ct-side-tab" type="button" data-view="snapshots" aria-controls="snapshotsView" aria-selected="false" title="Snapshots">
     <i class="bi bi-camera-fill"></i>
     <span>Snapshots</span>
@@ -198,6 +202,83 @@
 
   </div>
 
+  <div id="buzzView" class="ct-view d-none" data-view-panel="buzz">
+  <section class="ct-hero ct-card">
+    <div>
+      <span class="ct-eyebrow"><i class="bi bi-lightning-charge-fill"></i> Experimental local activity tracking</span>
+      <h1>Buzz Tracker</h1>
+      <p>Track Blue, Yellow, and Green Buzz activity locally, then inspect which model, image, or action may have caused the Buzz change.</p>
+    </div>
+    <div class="ct-hero-actions">
+      <button class="btn ct-btn-primary js-buzz-check" type="button"><i class="bi bi-arrow-repeat"></i> Run Buzz Check</button>
+      <button id="openBuzzSettings" class="btn ct-btn-secondary" type="button"><i class="bi bi-gear"></i> Open Buzz Settings</button>
+      <small>Experimental: availability depends on CivitAI Buzz API access.</small>
+    </div>
+  </section>
+
+  <section class="ct-card ct-setup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Endpoint status</span>
+        <h2>Buzz API</h2>
+      </div>
+      <span id="buzzStatusPill" class="ct-pill ct-pill-muted">Not checked</span>
+    </div>
+    <p id="buzzStatusHelp" class="ct-help mb-0">Enable Buzz tracking in Settings, then run a check.</p>
+  </section>
+
+  <section id="buzzMetricsGrid" class="ct-metrics" aria-label="Buzz account summary"></section>
+
+  <section class="ct-card ct-table-card">
+    <div class="ct-section-heading ct-table-heading">
+      <div>
+        <span class="ct-eyebrow">Stored local transactions</span>
+        <h2>Buzz Activity</h2>
+      </div>
+      <label class="ct-search"><i class="bi bi-search"></i><input id="buzzSearch" type="search" placeholder="Search source or description"></label>
+    </div>
+    <div class="ct-filter-section">
+      <span>Account</span>
+      <div class="ct-filter-row" id="buzzAccountFilters">
+        <button class="ct-filter active" type="button" data-buzz-account="all">All</button>
+        <button class="ct-filter" type="button" data-buzz-account="Blue">Blue</button>
+        <button class="ct-filter" type="button" data-buzz-account="Yellow">Yellow</button>
+        <button class="ct-filter" type="button" data-buzz-account="Green">Green</button>
+      </div>
+    </div>
+    <div class="ct-filter-section">
+      <span>Event</span>
+      <div class="ct-filter-row" id="buzzCategoryFilters">
+        <button class="ct-filter active" type="button" data-buzz-category="all">All</button>
+        <button class="ct-filter" type="button" data-buzz-category="model">Model</button>
+        <button class="ct-filter" type="button" data-buzz-category="image">Image</button>
+        <button class="ct-filter" type="button" data-buzz-category="tip">Tips</button>
+        <button class="ct-filter" type="button" data-buzz-category="reward">Rewards</button>
+        <button class="ct-filter" type="button" data-buzz-category="spend">Spending</button>
+        <button class="ct-filter" type="button" data-buzz-category="unknown">Unknown</button>
+      </div>
+    </div>
+    <div class="ct-filter-section ct-buzz-toolbar">
+      <div>
+        <span>Direction</span>
+        <div class="ct-filter-row" id="buzzDirectionFilters">
+          <button class="ct-filter active" type="button" data-buzz-direction="all">All</button>
+          <button class="ct-filter" type="button" data-buzz-direction="gained">Gained</button>
+          <button class="ct-filter" type="button" data-buzz-direction="spent">Spent</button>
+        </div>
+      </div>
+      <button class="btn ct-btn-secondary js-buzz-check" type="button"><i class="bi bi-arrow-repeat"></i> Run Buzz Check</button>
+    </div>
+    <p class="ct-help">Unknown and unmatched transactions are normal. Match confidence is direct only when CivitAI returns a model or image identifier.</p>
+    <div class="table-responsive ct-table-wrap">
+      <table class="table ct-table mb-0">
+        <thead><tr><th>Date</th><th>Buzz</th><th>Account</th><th>Event</th><th>Source</th><th>Description</th><th>Match</th><th>Link</th></tr></thead>
+        <tbody id="buzzRows"><tr><td colspan="8" class="ct-table-empty">Enable Buzz tracking and run a check to load activity.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
   <div id="snapshotsView" class="ct-view d-none" data-view-panel="snapshots">
   <section class="ct-card ct-table-card">
     <div class="ct-section-heading ct-table-heading">
@@ -339,6 +420,32 @@
     </form>
   </section>
 
+  <section id="buzzSettingsCard" class="ct-card ct-setup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Optional experimental feature</span>
+        <h2>Buzz Tracking</h2>
+      </div>
+    </div>
+    <p class="ct-help">Buzz tracking uses authenticated CivitAI Buzz endpoints. If unavailable, your normal model snapshots still work.</p>
+    <form id="buzzSettingsForm">
+      <div class="ct-toggle-grid">
+        <label class="ct-toggle-row"><span>Enable Buzz tracking</span><input id="buzzTrackingEnabled" type="checkbox"></label>
+        <label class="ct-toggle-row"><span>Track Blue Buzz</span><input id="buzzTrackBlue" type="checkbox"></label>
+        <label class="ct-toggle-row"><span>Track Yellow Buzz</span><input id="buzzTrackYellow" type="checkbox"></label>
+        <label class="ct-toggle-row"><span>Track Green Buzz</span><input id="buzzTrackGreen" type="checkbox"></label>
+      </div>
+      <details class="ct-advanced">
+        <summary>Advanced Buzz settings</summary>
+        <div class="ct-settings-grid">
+          <label class="ct-setting-field">Transaction fetch limit<input id="buzzTransactionLimit" class="form-control" type="number" min="20" max="500" step="1"></label>
+        </div>
+      </details>
+      <p class="ct-help">Blue Buzz is commonly earned from free or reward activity. Yellow and Green may include other account activity depending on CivitAI.</p>
+      <div class="ct-settings-actions"><button id="saveBuzzSettings" class="btn ct-btn-primary" type="submit"><i class="bi bi-floppy"></i> Save Buzz Settings</button></div>
+    </form>
+  </section>
+
   <section class="ct-card ct-setup">
     <div class="ct-section-heading">
       <div>
@@ -358,6 +465,8 @@
           <label class="ct-setting-field">Velocity spike multiplier<input id="alertVelocityMultiplier" class="form-control" type="number" min="0.1" step="0.1"></label>
           <label class="ct-setting-field">Velocity minimum current gain<input id="alertVelocityCurrent" class="form-control" type="number" min="1" step="1"></label>
           <label class="ct-setting-field">Velocity minimum previous gain<input id="alertVelocityPrevious" class="form-control" type="number" min="1" step="1"></label>
+          <label class="ct-setting-field">Large Buzz gain threshold<input id="alertBuzzLargeGain" class="form-control" type="number" min="1" step="1"></label>
+          <label class="ct-setting-field">Large Buzz spend threshold<input id="alertBuzzLargeSpend" class="form-control" type="number" min="1" step="1"></label>
         </div>
       </details>
       <div class="ct-settings-actions"><button id="saveAlertSettings" class="btn ct-btn-primary" type="submit"><i class="bi bi-floppy"></i> Save Alert Preferences</button></div>
@@ -444,5 +553,13 @@
     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
   </div>
   <div id="historyBody" class="offcanvas-body"></div>
+</div>
+
+<div class="offcanvas offcanvas-end ct-offcanvas" tabindex="-1" id="buzzDrawer" aria-labelledby="buzzDrawerTitle">
+  <div class="offcanvas-header">
+    <div><span class="ct-eyebrow">Stored Buzz transaction</span><h2 id="buzzDrawerTitle" class="offcanvas-title">Buzz Activity Detail</h2></div>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div id="buzzDrawerBody" class="offcanvas-body"></div>
 </div>
 {% endblock %}

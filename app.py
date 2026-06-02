@@ -5,6 +5,15 @@ from flask import Flask, jsonify, render_template, request, Response, send_file
 
 from services.alert_service import list_alerts, mark_alert_read, mark_all_alerts_read
 from services.backup_service import create_download_backup, MAX_RESTORE_BYTES, restore_database
+from services.buzz_service import (
+    get_buzz_settings,
+    get_buzz_transaction_detail,
+    latest_buzz_summary,
+    list_buzz_checks,
+    list_buzz_transactions,
+    run_buzz_check,
+    update_buzz_settings,
+)
 from services.compare_service import (
     compare_by_datetime,
     compare_latest_previous,
@@ -21,7 +30,7 @@ from services.settings_service import get_alert_settings, update_alert_settings
 from services.snapshot_service import delete_snapshot, take_snapshot
 
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 app = Flask(__name__)
 app.config["SECRET_KEY"] = get_config().secret_key
 app.config["MAX_CONTENT_LENGTH"] = MAX_RESTORE_BYTES
@@ -217,6 +226,51 @@ def alert_settings_update():
     payload = request.get_json(silent=True) or {}
     try:
         return jsonify({"ok": True, "settings": update_alert_settings(payload)})
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/api/buzz/status")
+def buzz_status():
+    return jsonify(latest_buzz_summary())
+
+
+@app.post("/api/buzz/check")
+def buzz_check():
+    result = run_buzz_check()
+    return jsonify(result), 200 if result["ok"] else 400
+
+
+@app.get("/api/buzz/checks")
+def buzz_checks():
+    return _json_action(lambda: {"checks": list_buzz_checks(request.args.get("limit", 50))})
+
+
+@app.get("/api/buzz/summary")
+def buzz_summary():
+    return jsonify(latest_buzz_summary())
+
+
+@app.get("/api/buzz/transactions")
+def buzz_transactions():
+    return jsonify({"transactions": list_buzz_transactions(request.args)})
+
+
+@app.get("/api/buzz/transaction-detail")
+def buzz_transaction_detail():
+    return _json_action(lambda: get_buzz_transaction_detail(_int_arg("id")))
+
+
+@app.get("/api/buzz-settings")
+def buzz_settings():
+    return jsonify(get_buzz_settings())
+
+
+@app.post("/api/buzz-settings")
+def buzz_settings_update():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify({"ok": True, "settings": update_buzz_settings(payload)})
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

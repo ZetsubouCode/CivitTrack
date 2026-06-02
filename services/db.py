@@ -116,6 +116,59 @@ CREATE TABLE IF NOT EXISTS snapshot_quality (
     created_at TEXT NOT NULL,
     FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
 );
+CREATE TABLE IF NOT EXISTS buzz_check (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    checked_at TEXT NOT NULL,
+    username TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    api_ok INTEGER NOT NULL DEFAULT 1,
+    error TEXT,
+    tracked_account_types TEXT,
+    quality_status TEXT NOT NULL DEFAULT 'good',
+    warning_count INTEGER DEFAULT 0,
+    warnings_json TEXT,
+    info_json TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS buzz_account_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    buzz_check_id INTEGER NOT NULL,
+    account_type TEXT NOT NULL,
+    balance INTEGER NULL,
+    gained_recent INTEGER NULL,
+    spent_recent INTEGER NULL,
+    raw_json TEXT,
+    FOREIGN KEY(buzz_check_id) REFERENCES buzz_check(id)
+);
+CREATE TABLE IF NOT EXISTS buzz_transaction (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_key TEXT NOT NULL,
+    account_type TEXT NOT NULL,
+    transaction_date TEXT,
+    amount INTEGER NOT NULL DEFAULT 0,
+    direction TEXT,
+    transaction_type TEXT,
+    event_category TEXT,
+    title TEXT,
+    description TEXT,
+    entity_type TEXT,
+    entity_id TEXT,
+    model_id INTEGER NULL,
+    model_name TEXT,
+    model_url TEXT,
+    image_id INTEGER NULL,
+    image_url TEXT,
+    post_id INTEGER NULL,
+    user_id INTEGER NULL,
+    username TEXT,
+    match_confidence TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    latest_check_id INTEGER,
+    raw_json TEXT,
+    UNIQUE(transaction_key, account_type),
+    FOREIGN KEY(latest_check_id) REFERENCES buzz_check(id)
+);
 CREATE INDEX IF NOT EXISTS idx_snapshot_checked_at ON snapshot(checked_at);
 CREATE INDEX IF NOT EXISTS idx_model_snapshot_lookup
     ON model_snapshot(snapshot_id, model_id);
@@ -128,6 +181,17 @@ CREATE INDEX IF NOT EXISTS idx_local_alert_snapshot
     ON local_alert(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_snapshot_quality_snapshot
     ON snapshot_quality(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_buzz_check_checked_at ON buzz_check(checked_at);
+CREATE INDEX IF NOT EXISTS idx_buzz_transaction_account_date
+    ON buzz_transaction(account_type, transaction_date);
+CREATE INDEX IF NOT EXISTS idx_buzz_transaction_category
+    ON buzz_transaction(event_category);
+CREATE INDEX IF NOT EXISTS idx_buzz_transaction_model
+    ON buzz_transaction(model_id);
+CREATE INDEX IF NOT EXISTS idx_buzz_transaction_image
+    ON buzz_transaction(image_id);
+CREATE INDEX IF NOT EXISTS idx_buzz_transaction_latest_check
+    ON buzz_transaction(latest_check_id);
 """
 
 
@@ -168,6 +232,18 @@ def init_db() -> None:
             connection.execute("ALTER TABLE snapshot ADD COLUMN note TEXT")
         if "note_type" not in snapshot_columns:
             connection.execute("ALTER TABLE snapshot ADD COLUMN note_type TEXT")
+        buzz_check_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(buzz_check)")
+        }
+        for name, definition in (
+            ("source", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("quality_status", "TEXT NOT NULL DEFAULT 'good'"),
+            ("warning_count", "INTEGER DEFAULT 0"),
+            ("warnings_json", "TEXT"),
+            ("info_json", "TEXT"),
+        ):
+            if name not in buzz_check_columns:
+                connection.execute(f"ALTER TABLE buzz_check ADD COLUMN {name} {definition}")
 
 
 def dict_rows(cursor: sqlite3.Cursor) -> list[dict]:

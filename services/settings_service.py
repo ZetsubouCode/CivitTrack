@@ -14,6 +14,10 @@ DEFAULT_ALERT_SETTINGS = {
         "download_velocity_spike": True,
         "snapshot_warning": True,
         "snapshot_failed": True,
+        "buzz_unavailable": True,
+        "buzz_tip": True,
+        "buzz_large_gain": True,
+        "buzz_large_spend": True,
     },
     "download_milestones": [
         100, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000
@@ -23,6 +27,8 @@ DEFAULT_ALERT_SETTINGS = {
     "velocity_spike_multiplier": 2.0,
     "velocity_minimum_current_delta": 10,
     "velocity_minimum_previous_delta": 5,
+    "buzz_large_gain_threshold": 50,
+    "buzz_large_spend_threshold": 100,
 }
 
 
@@ -95,6 +101,8 @@ def get_alert_settings(connection=None) -> dict:
         "velocity_spike_multiplier",
         "velocity_minimum_current_delta",
         "velocity_minimum_previous_delta",
+        "buzz_large_gain_threshold",
+        "buzz_large_spend_threshold",
     ):
         if key in stored:
             settings[key] = stored[key]
@@ -144,6 +152,14 @@ def update_alert_settings(payload, connection=None) -> dict:
         "velocity_minimum_previous_delta": _positive_int(
             "velocity_minimum_previous_delta",
             payload.get("velocity_minimum_previous_delta", DEFAULT_ALERT_SETTINGS["velocity_minimum_previous_delta"]),
+        ),
+        "buzz_large_gain_threshold": _positive_int(
+            "buzz_large_gain_threshold",
+            payload.get("buzz_large_gain_threshold", DEFAULT_ALERT_SETTINGS["buzz_large_gain_threshold"]),
+        ),
+        "buzz_large_spend_threshold": _positive_int(
+            "buzz_large_spend_threshold",
+            payload.get("buzz_large_spend_threshold", DEFAULT_ALERT_SETTINGS["buzz_large_spend_threshold"]),
         ),
     }
     if not normalized["download_milestones"]:

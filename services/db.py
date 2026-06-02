@@ -89,12 +89,29 @@ CREATE TABLE IF NOT EXISTS sync_log (
     level TEXT NOT NULL,
     message TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS local_alert (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    username TEXT NOT NULL,
+    snapshot_id INTEGER NULL,
+    level TEXT NOT NULL DEFAULT 'info',
+    alert_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    model_id INTEGER NULL,
+    is_read INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
+);
 CREATE INDEX IF NOT EXISTS idx_snapshot_checked_at ON snapshot(checked_at);
 CREATE INDEX IF NOT EXISTS idx_model_snapshot_lookup
     ON model_snapshot(snapshot_id, model_id);
 CREATE INDEX IF NOT EXISTS idx_model_version_snapshot_lookup
     ON model_version_snapshot(snapshot_id, model_id, model_version_id);
 CREATE INDEX IF NOT EXISTS idx_sync_log_created_at ON sync_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_local_alert_inbox
+    ON local_alert(username, is_read, id);
+CREATE INDEX IF NOT EXISTS idx_local_alert_snapshot
+    ON local_alert(snapshot_id);
 """
 
 

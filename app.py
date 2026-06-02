@@ -1,7 +1,9 @@
 from io import BytesIO
+import sqlite3
 
 from flask import Flask, jsonify, render_template, request, Response, send_file
 
+from services.alert_service import list_alerts, mark_alert_read, mark_all_alerts_read
 from services.backup_service import create_download_backup, MAX_RESTORE_BYTES, restore_database
 from services.compare_service import (
     compare_by_datetime,
@@ -11,13 +13,13 @@ from services.compare_service import (
     get_model_history,
     list_snapshots,
 )
-from services.config import get_config
+from services.config import get_config, list_env_settings, update_env_settings
 from services.db import init_db, list_sync_logs
 from services.export_service import comparison_csv
 from services.snapshot_service import delete_snapshot, take_snapshot
 
 
-APP_VERSION = "2.1.4"
+APP_VERSION = "2.2.0"
 app = Flask(__name__)
 app.config["SECRET_KEY"] = get_config().secret_key
 app.config["MAX_CONTENT_LENGTH"] = MAX_RESTORE_BYTES
@@ -67,6 +69,28 @@ def status():
             "app_version": APP_VERSION,
         }
     )
+
+
+@app.get("/api/settings")
+def settings():
+    return jsonify(list_env_settings())
+
+
+@app.post("/api/settings")
+def settings_update():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Settings request must be a JSON object."}), 400
+    previous_config = get_config()
+    try:
+        result = update_env_settings(payload.get("values"), payload.get("clear_secrets"))
+        current_config = get_config()
+        if current_config.db_path != previous_config.db_path:
+            init_db()
+        app.config["SECRET_KEY"] = current_config.secret_key
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, **result})
 
 
 @app.post("/api/snapshot")
@@ -154,6 +178,21 @@ def export_csv():
 @app.get("/api/logs")
 def logs():
     return jsonify({"logs": list_sync_logs()})
+
+
+@app.get("/api/alerts")
+def alerts():
+    return jsonify(list_alerts())
+
+
+@app.post("/api/alerts/<int:alert_id>/read")
+def alert_read(alert_id: int):
+    return _json_action(lambda: mark_alert_read(alert_id))
+
+
+@app.post("/api/alerts/read-all")
+def alerts_read_all():
+    return _json_action(mark_all_alerts_read)
 
 
 if __name__ == "__main__":

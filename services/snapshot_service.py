@@ -2,6 +2,7 @@ from copy import deepcopy
 import json
 from urllib.parse import urlparse
 
+from .alert_service import generate_snapshot_alerts, insert_alert
 from .civitai_client import CivitaiClient, CivitaiError
 from .config import build_model_page_url, get_config
 from .db import insert_sync_log, transaction, utc_now
@@ -174,6 +175,14 @@ def _record_failed_snapshot(error: str, source: str) -> None:
             (now, config.username, source, config.model_type_filter, error, now),
         )
         insert_sync_log("error", error, connection)
+        insert_alert(
+            "error",
+            "snapshot_failed",
+            "Snapshot failed",
+            error,
+            username=config.username,
+            connection=connection,
+        )
 
 
 def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
@@ -182,10 +191,12 @@ def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
     if not config.api_key:
         error = "API key is missing. Add CIVITAI_API_KEY to .env, restart the app, then try again."
         insert_sync_log("error", error)
+        insert_alert("error", "snapshot_failed", "Snapshot failed", error)
         return {"ok": False, "error": error, "warnings": [], "info": []}
     if not config.username:
         error = "Username is missing. Add CIVITAI_USERNAME to .env, restart the app, then try again."
         insert_sync_log("error", error)
+        insert_alert("error", "snapshot_failed", "Snapshot failed", error)
         return {"ok": False, "error": error, "warnings": [], "info": []}
 
     client = CivitaiClient(config)
@@ -261,10 +272,13 @@ def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
             insert_sync_log("info", message, connection)
         for warning in warnings:
             insert_sync_log("warning", warning, connection)
+        alert_count = generate_snapshot_alerts(
+            connection, snapshot_id, config.username, warnings
+        )
         insert_sync_log(
             "info",
             f"Snapshot {snapshot_id} saved: {len(normalized_models)} models and "
-            f"{len(version_rows)} versions.",
+            f"{len(version_rows)} versions. Generated {alert_count} local alerts.",
             connection,
         )
     return {
@@ -275,6 +289,7 @@ def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
         "snapshot_id": snapshot_id,
         "checked_at": checked_at,
         "summary": summary,
+        "alert_count": alert_count,
     }
 
 
@@ -287,6 +302,9 @@ def delete_snapshot(snapshot_id: int) -> dict:
         ).fetchone()
         if not snapshot:
             raise ValueError("Snapshot could not be found.")
+        deleted_alerts = connection.execute(
+            "DELETE FROM local_alert WHERE snapshot_id = ?", (snapshot_id,)
+        ).rowcount
         deleted_versions = connection.execute(
             "DELETE FROM model_version_snapshot WHERE snapshot_id = ?", (snapshot_id,)
         ).rowcount
@@ -298,7 +316,7 @@ def delete_snapshot(snapshot_id: int) -> dict:
         insert_sync_log(
             "info",
             f"Snapshot {snapshot_id} deleted: {deleted_models} models and "
-            f"{deleted_versions} versions removed.",
+            f"{deleted_versions} versions and {deleted_alerts} local alerts removed.",
             connection,
         )
     return {
@@ -306,4 +324,5 @@ def delete_snapshot(snapshot_id: int) -> dict:
         "snapshot_id": snapshot_id,
         "deleted_models": deleted_models,
         "deleted_versions": deleted_versions,
+        "deleted_alerts": deleted_alerts,
     }

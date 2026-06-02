@@ -61,12 +61,13 @@ Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
 Click **Take Snapshot** to store the first snapshot. Add an optional local note to record context such as a preview-image change or a newly published version. Take another snapshot later, then click **Compare Latest vs Previous**. The model table sorts growth by newest publication date by default, while the version table reveals which model version gained downloads.
 
-Use the floating navigation tabs to switch between four focused sections:
+Use the floating navigation tabs to switch between five focused sections:
 
 - **Overview** keeps snapshot capture and comparison controls beside growth analytics.
 - **Models** expands the latest account totals into a searchable model portfolio. Switch between **Downloads**, **Reactions**, and **Collections** to rank each total, or sort models by newest and oldest publication date.
-- **Snapshots** lists stored snapshot history, including notes and a confirmed delete action for removing an unwanted snapshot and its related model-version records.
-- **Settings** shows local configuration, backup and restore controls, and sync logs.
+- **Snapshots** lists stored snapshot history and sync activity, including notes and a confirmed delete action for removing an unwanted snapshot and its related model-version records.
+- **Alerts** stores a local inbox of actionable snapshot notifications with unread tracking and links back to affected CivitAI models.
+- **Settings** edits local `.env` configuration with per-field tooltips, and keeps backup and restore controls together.
 
 The **Model Growth** comparison defaults to newest models first. Use its sort controls to switch to oldest models or rank by download and reaction growth. After comparing snapshots, **Top Movers** highlights the strongest download, collection, and reaction gains plus the top newly detected model by downloads.
 
@@ -75,6 +76,8 @@ The displayed **Published** date uses the newest available model-version publica
 Dashboard dates use `DD/MM/YYYY`. Snapshot and log timestamps keep the local `HH:mm` time after the date. Clicking a model row opens Stored Timeline with its remote CivitAI cover image when available; CivitTrack does not download that image into local storage.
 
 CSV export becomes available after selecting a comparison.
+
+After each successful snapshot, CivitTrack checks the previous local history and adds inbox alerts for newly detected or missing models, newly detected versions, crossed model download milestones, meaningful download-velocity spikes, on-site generation support changes, and snapshot warnings. Failed snapshot attempts also create local alerts. The first successful snapshot establishes a baseline without generating an alert for every existing model.
 
 Settings includes local SQLite backup and restore controls. Download a backup before major changes. Restore validates the uploaded SQLite file before replacing the active database and keeps an automatic pre-restore safety copy under `storage/backups/`.
 
@@ -123,6 +126,8 @@ APP_HOST=127.0.0.1
 APP_PORT=8787
 SECRET_KEY=dev-only-change-me
 ```
+
+The same values can be edited from the dashboard **Settings** tab. Secret fields stay masked and are only replaced when a new value is entered.
 
 The SQLite database is created automatically under `storage/`.
 

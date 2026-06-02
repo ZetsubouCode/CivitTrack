@@ -1,7 +1,10 @@
 const state = {
   currentView: "overview",
   status: null,
+  settings: null,
   snapshots: [],
+  alerts: [],
+  unreadAlertCount: 0,
   latestBreakdown: null,
   breakdownMetric: "download_count",
   breakdownSort: "metric",
@@ -46,7 +49,7 @@ function compareDates(a, b, direction) {
 }
 
 function setView(view, updateHash = true) {
-  const views = ["overview", "models", "snapshots", "settings"];
+  const views = ["overview", "models", "snapshots", "alerts", "settings"];
   const nextView = views.includes(view) ? view : "overview";
   state.currentView = nextView;
   $$("[data-view-panel]").forEach((panel) => panel.classList.toggle("d-none", panel.dataset.viewPanel !== nextView));
@@ -95,12 +98,23 @@ function renderStatus() {
   $("#setupPill").className = `ct-pill ${pillClass}`;
   $("#setupPill").textContent = pillText;
   $("#navLastSnapshot").textContent = state.status.last_snapshot ? `Last snapshot ${dateFmt(state.status.last_snapshot)}` : "No snapshots yet";
-  $("#setupUsername").textContent = state.status.username || "Missing";
-  $("#setupApiKey").textContent = state.status.api_key_configured ? "Configured locally" : "Missing";
-  $("#setupModelFilter").textContent = state.status.model_type_filter;
-  $("#setupRestrictedModels").textContent = state.status.include_nsfw && state.status.include_minor ? "Included for analytics" : "Partially excluded";
-  $("#setupDbPath").textContent = state.status.db_path;
-  $("#setupHelp").textContent = ready ? "Configuration is loaded. Credentials remain server-side." : "Add CIVITAI_API_KEY and CIVITAI_USERNAME to .env, restart the app, then try again.";
+  $("#setupHelp").textContent = ready ? "Configuration is loaded from the local .env file. Password values remain server-side." : "Add a CivitAI API key and username below, then save the settings before taking a snapshot.";
+}
+
+function renderSettings() {
+  const fields = state.settings?.fields || {};
+  $$("#settingsForm [name]").forEach((input) => {
+    const field = fields[input.name];
+    if (!field) return;
+    input.value = input.type === "password" ? "" : field.value;
+    if (input.type === "password") {
+      input.placeholder = field.configured ? "Leave blank to keep saved value" : "No saved value";
+    }
+  });
+  $$("#settingsForm [data-clear-secret]").forEach((checkbox) => {
+    checkbox.checked = false;
+    $(`#settingsForm [name="${checkbox.dataset.clearSecret}"]`).disabled = false;
+  });
 }
 
 const metricSpec = [
@@ -313,19 +327,52 @@ function clearComparison() {
 }
 
 async function refresh() {
-  const [status, snapshots, breakdown, logs] = await Promise.all([api("/api/status"), api("/api/snapshots"), api("/api/latest-breakdown"), api("/api/logs")]);
+  const [status, settings, snapshots, breakdown, logs, alerts] = await Promise.all([api("/api/status"), api("/api/settings"), api("/api/snapshots"), api("/api/latest-breakdown"), api("/api/logs"), api("/api/alerts")]);
   state.status = status;
+  state.settings = settings;
   state.snapshots = snapshots.snapshots;
   state.latestBreakdown = breakdown;
+  state.alerts = alerts.alerts;
+  state.unreadAlertCount = alerts.unread_count;
   renderStatus();
+  renderSettings();
   renderSnapshots();
   renderMetrics();
   renderBreakdown();
   renderLogs(logs.logs);
+  renderAlerts();
 }
 
 function renderLogs(logs) {
   $("#logRows").innerHTML = logs.length ? logs.map((row) => `<div class="ct-log-${esc(row.level)}">[${esc(dateFmt(row.created_at))}] ${esc(row.level.toUpperCase())}: ${esc(row.message)}</div>`).join("") : `<div class="ct-log-info">Logs will appear here.</div>`;
+}
+
+function renderAlerts() {
+  const alerts = state.alerts;
+  const unread = state.unreadAlertCount;
+  $("#alertNavBadge").classList.toggle("d-none", !unread);
+  $("#alertNavBadge").textContent = unread > 99 ? "99+" : String(unread);
+  $("#markAllAlertsRead").disabled = !unread;
+  $("#alertsHelp").textContent = alerts.length
+    ? `${fmt(unread)} unread alert${unread === 1 ? "" : "s"}. Showing the latest ${alerts.length} local notification${alerts.length === 1 ? "" : "s"}.`
+    : "Alerts will appear after snapshot capture when CivitTrack detects something actionable.";
+  $("#alertInboxRows").innerHTML = alerts.length ? alerts.map((alert) => `
+    <article class="ct-inbox-item ct-inbox-${esc(alert.level)} ${alert.is_read ? "" : "ct-inbox-unread"}">
+      <div class="ct-inbox-icon"><i class="bi ${alert.level === "error" ? "bi-exclamation-octagon-fill" : alert.level === "warning" ? "bi-exclamation-triangle-fill" : alert.level === "success" ? "bi-graph-up-arrow" : "bi-info-circle-fill"}"></i></div>
+      <div class="ct-inbox-content">
+        <div class="ct-inbox-heading">
+          <strong>${esc(alert.title)}</strong>
+          ${alert.is_read ? "" : '<span class="ct-unread-dot">Unread</span>'}
+        </div>
+        <p>${esc(alert.message)}</p>
+        <small>${esc(dateFmt(alert.created_at))}${alert.snapshot_id ? ` | Snapshot #${alert.snapshot_id}` : ""}</small>
+      </div>
+      <div class="ct-inbox-actions">
+        ${alert.page_url ? `<a class="btn ct-btn-quiet" href="${esc(alert.page_url)}" target="_blank" rel="noopener" title="Open model on CivitAI"><i class="bi bi-box-arrow-up-right"></i></a>` : ""}
+        ${alert.is_read ? "" : `<button class="btn ct-btn-quiet js-read-alert" type="button" data-alert-id="${alert.id}" title="Mark alert as read"><i class="bi bi-check2"></i></button>`}
+      </div>
+    </article>`).join("") : `<div class="ct-inbox-empty">No local alerts yet. Take snapshots over time to detect changes.</div>`;
+  $$(".js-read-alert").forEach((button) => button.addEventListener("click", markAlertRead));
 }
 
 function openSnapshotModal() {
@@ -345,10 +392,30 @@ async function takeSnapshot(event) {
       body: JSON.stringify({ note: $("#snapshotNote").value }),
     });
     bootstrap.Modal.getOrCreateInstance($("#snapshotModal")).hide();
-    toast(`Snapshot ${result.snapshot_id} saved.`);
+    toast(`Snapshot ${result.snapshot_id} saved.${result.alert_count ? ` ${fmt(result.alert_count)} new alert${result.alert_count === 1 ? "" : "s"}.` : ""}`);
     clearComparison();
     await refresh();
-  } catch (error) { toast(error.message, "error"); await loadLogs(); }
+  } catch (error) { toast(error.message, "error"); await Promise.all([loadLogs(), loadAlerts()]); }
+  finally { busy(button, false); }
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  const button = $("#saveSettings");
+  const values = Object.fromEntries($$("#settingsForm [name]").map((input) => [input.name, input.value]));
+  const clearSecrets = $$("#settingsForm [data-clear-secret]:checked").map((checkbox) => checkbox.dataset.clearSecret);
+  busy(button, true, "Saving...");
+  try {
+    const result = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values, clear_secrets: clearSecrets }),
+    });
+    state.settings = result.settings;
+    await refresh();
+    $("#settingsRestartHelp").textContent = result.restart_required ? "Restart CivitTrack to apply the new application host or port." : "";
+    toast(result.changed.length ? "Local settings saved." : "Settings are already up to date.");
+  } catch (error) { toast(error.message, "error"); }
   finally { busy(button, false); }
 }
 
@@ -374,7 +441,7 @@ async function restoreDatabase(event) {
 async function deleteSnapshot(event) {
   const button = event.currentTarget;
   const snapshotId = Number(button.dataset.snapshotId);
-  if (!window.confirm(`Delete snapshot #${snapshotId}? This removes its stored model and version history permanently.`)) return;
+  if (!window.confirm(`Delete snapshot #${snapshotId}? This removes its stored model, version, and linked alert history permanently.`)) return;
   busy(button, true, "Deleting...");
   try {
     await api(`/api/snapshots/${encodeURIComponent(snapshotId)}`, { method: "DELETE" });
@@ -383,6 +450,34 @@ async function deleteSnapshot(event) {
     await refresh();
   } catch (error) { toast(error.message, "error"); }
   finally { busy(button, false); }
+}
+
+async function markAlertRead(event) {
+  const button = event.currentTarget;
+  busy(button, true, "...");
+  try {
+    await api(`/api/alerts/${encodeURIComponent(button.dataset.alertId)}/read`, { method: "POST" });
+    await loadAlerts();
+  } catch (error) { toast(error.message, "error"); }
+  finally { busy(button, false); }
+}
+
+async function markAllAlertsRead(event) {
+  const button = event.currentTarget;
+  busy(button, true, "Marking...");
+  try {
+    const result = await api("/api/alerts/read-all", { method: "POST" });
+    await loadAlerts();
+    toast(`${fmt(result.updated)} alert${result.updated === 1 ? "" : "s"} marked as read.`);
+  } catch (error) { toast(error.message, "error"); }
+  finally { busy(button, false); }
+}
+
+async function loadAlerts() {
+  const result = await api("/api/alerts");
+  state.alerts = result.alerts;
+  state.unreadAlertCount = result.unread_count;
+  renderAlerts();
 }
 
 async function compare(url, button) {
@@ -417,7 +512,9 @@ $$(".js-snapshot").forEach((button) => button.addEventListener("click", openSnap
 $$(".js-compare-latest").forEach((button) => button.addEventListener("click", (event) => compare("/api/compare-latest", event.currentTarget)));
 $$(".ct-side-tab").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
 $("#snapshotForm").addEventListener("submit", takeSnapshot);
+$("#settingsForm").addEventListener("submit", saveSettings);
 $("#restoreForm").addEventListener("submit", restoreDatabase);
+$("#markAllAlertsRead").addEventListener("click", markAllAlertsRead);
 $("#compareSelected").addEventListener("click", (event) => compare(`/api/compare?from_id=${$("#fromSnapshot").value}&to_id=${$("#toSnapshot").value}`, event.currentTarget));
 $("#compareDate").addEventListener("click", (event) => {
   const fromValue = $("#fromDate").value;
@@ -458,11 +555,17 @@ $("#modelSorts").addEventListener("click", (event) => {
   renderModels();
 });
 $("#showAllVersions").addEventListener("click", () => { state.showAllVersions = true; renderVersions(); });
+$$("[data-clear-secret]").forEach((checkbox) => checkbox.addEventListener("change", () => {
+  const input = $(`#settingsForm [name="${checkbox.dataset.clearSecret}"]`);
+  input.value = "";
+  input.disabled = checkbox.checked;
+}));
+$$('[data-bs-toggle="tooltip"]').forEach((element) => bootstrap.Tooltip.getOrCreateInstance(element));
 
 function viewFromHash() {
   const hash = location.hash.slice(1);
   if (hash === "snapshot-manager") return "snapshots";
-  return ["overview", "models", "snapshots", "settings"].includes(hash) ? hash : "overview";
+  return ["overview", "models", "snapshots", "alerts", "settings"].includes(hash) ? hash : "overview";
 }
 
 window.addEventListener("hashchange", () => setView(viewFromHash(), false));

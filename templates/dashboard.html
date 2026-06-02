@@ -29,6 +29,11 @@
     <i class="bi bi-camera-fill"></i>
     <span>Snapshots</span>
   </button>
+  <button class="ct-side-tab" type="button" data-view="alerts" aria-controls="alertsView" aria-selected="false" title="Alerts">
+    <i class="bi bi-bell-fill"></i>
+    <span>Alerts</span>
+    <b id="alertNavBadge" class="ct-nav-badge d-none">0</b>
+  </button>
   <button class="ct-side-tab" type="button" data-view="settings" aria-controls="settingsView" aria-selected="false" title="Settings">
     <i class="bi bi-gear-fill"></i>
     <span>Settings</span>
@@ -188,6 +193,7 @@
       </table>
     </div>
   </section>
+
   </div>
 
   <div id="snapshotsView" class="ct-view d-none" data-view-panel="snapshots">
@@ -206,25 +212,116 @@
       </table>
     </div>
   </section>
+
+  <section class="ct-card ct-log-card">
+    <details open>
+      <summary class="ct-details-summary">
+        <span><span class="ct-eyebrow">Activity</span><strong>Sync Logs</strong></span>
+        <small>Local snapshot events</small>
+      </summary>
+      <div id="logRows" class="ct-logs"><div class="ct-log-info">Logs will appear here.</div></div>
+    </details>
+  </section>
+  </div>
+
+  <div id="alertsView" class="ct-view d-none" data-view-panel="alerts">
+  <section class="ct-card ct-alert-inbox">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Local notifications</span>
+        <h2>Alerts Inbox</h2>
+      </div>
+      <button id="markAllAlertsRead" class="btn ct-btn-quiet" type="button">
+        <i class="bi bi-check2-all"></i> Mark all read
+      </button>
+    </div>
+    <p id="alertsHelp" class="ct-help">Snapshot alerts are stored locally in your SQLite database.</p>
+    <div id="alertInboxRows" class="ct-inbox-list">
+      <div class="ct-inbox-empty">Loading alerts.</div>
+    </div>
+  </section>
   </div>
 
   <div id="settingsView" class="ct-view d-none" data-view-panel="settings">
-  <section class="ct-card ct-setup">
+  <section class="ct-card ct-setup ct-settings-editor">
     <div class="ct-section-heading">
       <div>
-        <span class="ct-eyebrow">Setup status</span>
-        <h2>Local Connection</h2>
+        <span class="ct-eyebrow">Local environment</span>
+        <h2>Application Settings</h2>
       </div>
       <span id="setupPill" class="ct-pill ct-pill-muted">Checking</span>
     </div>
-    <div class="ct-setup-grid">
-      <div><span>Username</span><strong id="setupUsername">-</strong></div>
-      <div><span>API key</span><strong id="setupApiKey">-</strong></div>
-      <div><span>Model filter</span><strong id="setupModelFilter">-</strong></div>
-      <div><span>Restricted / minor</span><strong id="setupRestrictedModels">-</strong></div>
-      <div><span>Database</span><strong id="setupDbPath">-</strong></div>
-    </div>
-    <p id="setupHelp" class="ct-help mb-0"></p>
+    <p id="setupHelp" class="ct-help">Loading local `.env` settings.</p>
+    <form id="settingsForm">
+      <div class="ct-settings-grid">
+        <div class="ct-setting-field">
+          <label for="settingApiKey">CivitAI API key</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Private CivitAI API key used for snapshot requests. Leave this password field blank to keep the saved key."><i class="bi bi-question-circle"></i></button>
+          <input id="settingApiKey" class="form-control" type="password" name="CIVITAI_API_KEY" autocomplete="off" placeholder="Leave blank to keep saved key">
+          <label class="ct-clear-secret"><input type="checkbox" data-clear-secret="CIVITAI_API_KEY"> Clear saved API key</label>
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingUsername">CivitAI username</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Creator username whose models are fetched and tracked in snapshots."><i class="bi bi-question-circle"></i></button>
+          <input id="settingUsername" class="form-control" type="text" name="CIVITAI_USERNAME" autocomplete="username">
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingBaseUrl">CivitAI base URL</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Base website URL used for API requests and model-page links. Include http:// or https://."><i class="bi bi-question-circle"></i></button>
+          <input id="settingBaseUrl" class="form-control" type="url" name="CIVITAI_BASE_URL">
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingDatabase">SQLite database path</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Local SQLite file used to store snapshots, alerts, and logs. Relative paths start from the app folder."><i class="bi bi-question-circle"></i></button>
+          <input id="settingDatabase" class="form-control" type="text" name="CIVITAI_ANALYTICS_DB">
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingTimeout">Request timeout</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Maximum number of seconds to wait for an individual remote CivitAI request."><i class="bi bi-question-circle"></i></button>
+          <input id="settingTimeout" class="form-control" type="number" min="1" step="1" name="CIVITAI_TIMEOUT_SECONDS">
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingModelTypes">Model types</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Comma-separated CivitAI model types to include in snapshots, such as LORA."><i class="bi bi-question-circle"></i></button>
+          <input id="settingModelTypes" class="form-control" type="text" name="CIVITAI_MODEL_TYPES">
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingIncludeNsfw">Include restricted models</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Include restricted or NSFW creator models in analytics so totals are more complete."><i class="bi bi-question-circle"></i></button>
+          <select id="settingIncludeNsfw" class="form-select" name="CIVITAI_INCLUDE_NSFW"><option value="true">True</option><option value="false">False</option></select>
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingIncludeMinor">Include minor-flagged models</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Discover and merge creator-owned models flagged as minor when the standard public listing omits them."><i class="bi bi-question-circle"></i></button>
+          <select id="settingIncludeMinor" class="form-select" name="CIVITAI_INCLUDE_MINOR"><option value="true">True</option><option value="false">False</option></select>
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingMaxPages">Maximum API pages</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Safety limit for the number of paginated CivitAI result pages fetched during one snapshot."><i class="bi bi-question-circle"></i></button>
+          <input id="settingMaxPages" class="form-control" type="number" min="1" step="1" name="CIVITAI_MAX_PAGES">
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingHost">Application host</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Network interface where the local web server listens. Changing this takes effect after restarting the app."><i class="bi bi-question-circle"></i></button>
+          <input id="settingHost" class="form-control" type="text" name="APP_HOST">
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingPort">Application port</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="TCP port where the local web server listens. Changing this takes effect after restarting the app."><i class="bi bi-question-circle"></i></button>
+          <input id="settingPort" class="form-control" type="number" min="1" max="65535" step="1" name="APP_PORT">
+        </div>
+        <div class="ct-setting-field">
+          <label for="settingSecretKey">Flask secret key</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Private local Flask signing key. Use a long random value. Leave this password field blank to keep the saved key."><i class="bi bi-question-circle"></i></button>
+          <input id="settingSecretKey" class="form-control" type="password" name="SECRET_KEY" autocomplete="new-password" placeholder="Leave blank to keep saved key">
+          <label class="ct-clear-secret"><input type="checkbox" data-clear-secret="SECRET_KEY"> Clear saved secret key</label>
+        </div>
+      </div>
+      <div class="ct-settings-actions">
+        <button id="saveSettings" class="btn ct-btn-primary" type="submit"><i class="bi bi-floppy"></i> Save Settings</button>
+        <small id="settingsRestartHelp" class="ct-help"></small>
+      </div>
+    </form>
   </section>
 
   <section class="ct-card ct-data-tools">
@@ -244,15 +341,6 @@
     </div>
   </section>
 
-  <section class="ct-card ct-log-card">
-    <details open>
-      <summary class="ct-details-summary">
-        <span><span class="ct-eyebrow">Activity</span><strong>Sync Logs</strong></span>
-        <small>Local snapshot events</small>
-      </summary>
-      <div id="logRows" class="ct-logs"><div class="ct-log-info">Logs will appear here.</div></div>
-    </details>
-  </section>
   </div>
 </main>
 

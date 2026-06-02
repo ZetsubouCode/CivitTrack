@@ -3,22 +3,7 @@ import json
 
 from .config import get_config
 from .db import create_connection, dict_rows, utc_now
-
-
-DOWNLOAD_MILESTONES = (
-    100,
-    500,
-    1_000,
-    2_500,
-    5_000,
-    10_000,
-    25_000,
-    50_000,
-    100_000,
-    250_000,
-    500_000,
-    1_000_000,
-)
+from .settings_service import get_alert_settings
 
 
 def insert_alert(
@@ -30,10 +15,15 @@ def insert_alert(
     username: str | None = None,
     snapshot_id: int | None = None,
     model_id: int | None = None,
+    respect_preferences: bool = False,
     connection=None,
-) -> None:
+) -> bool:
     owns_connection = connection is None
     connection = connection or create_connection()
+    if respect_preferences and not get_alert_settings(connection)["enabled"].get(alert_type, True):
+        if owns_connection:
+            connection.close()
+        return False
     connection.execute(
         "INSERT INTO local_alert "
         "(created_at, username, snapshot_id, level, alert_type, title, message, model_id) "
@@ -52,13 +42,14 @@ def insert_alert(
     if owns_connection:
         connection.commit()
         connection.close()
+    return True
 
 
 def _model_rows(connection, snapshot_id: int) -> dict[int, dict]:
     return {
         row["model_id"]: dict(row)
         for row in connection.execute(
-            "SELECT model_id, model_name, download_count, raw_json "
+            "SELECT model_id, model_name, download_count, collected_count, raw_json "
             "FROM model_snapshot WHERE snapshot_id = ?",
             (snapshot_id,),
         )
@@ -84,8 +75,8 @@ def _supports_generation(row: dict) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def _largest_crossed_milestone(old_value: int, new_value: int) -> int | None:
-    crossed = [value for value in DOWNLOAD_MILESTONES if old_value < value <= new_value]
+def _largest_crossed_milestone(old_value: int, new_value: int, milestones: list[int]) -> int | None:
+    crossed = [value for value in milestones if old_value < value <= new_value]
     return crossed[-1] if crossed else None
 
 
@@ -99,6 +90,7 @@ def _create_model_change_alerts(
     snapshot_id: int,
     current_snapshot: dict,
     previous_snapshots: list[dict],
+    settings: dict,
 ) -> int:
     previous_snapshot = previous_snapshots[0]
     current_models = _model_rows(connection, snapshot_id)
@@ -112,6 +104,8 @@ def _create_model_change_alerts(
 
     for model_id in sorted(current_models.keys() - previous_models.keys()):
         model = current_models[model_id]
+        if not settings["enabled"]["new_model"]:
+            continue
         insert_alert(
             "info",
             "new_model",
@@ -126,6 +120,8 @@ def _create_model_change_alerts(
 
     for model_id in sorted(previous_models.keys() - current_models.keys()):
         model = previous_models[model_id]
+        if not settings["enabled"]["missing_model"]:
+            continue
         insert_alert(
             "warning",
             "missing_model",
@@ -148,9 +144,9 @@ def _create_model_change_alerts(
         current = current_models[model_id]
         previous = previous_models[model_id]
         milestone = _largest_crossed_milestone(
-            previous["download_count"], current["download_count"]
+            previous["download_count"], current["download_count"], settings["download_milestones"]
         )
-        if milestone:
+        if milestone and settings["enabled"]["download_milestone"]:
             insert_alert(
                 "success",
                 "download_milestone",
@@ -166,6 +162,8 @@ def _create_model_change_alerts(
         previous_support = _supports_generation(previous)
         current_support = _supports_generation(current)
         if (
+            settings["enabled"]["generation_support_changed"]
+            and
             previous_support is not None
             and current_support is not None
             and previous_support != current_support
@@ -183,14 +181,52 @@ def _create_model_change_alerts(
             )
             created += 1
 
+        download_delta = current["download_count"] - previous["download_count"]
+        if download_delta >= settings["minimum_download_gain_alert"]:
+            insert_alert(
+                "success",
+                "download_growth",
+                "Download growth detected",
+                f"{current['model_name']} gained {download_delta:,} downloads since the previous snapshot.",
+                username=username,
+                snapshot_id=snapshot_id,
+                model_id=model_id,
+                connection=connection,
+            )
+            created += 1
+        if (
+            current["collected_count"] is not None
+            and previous["collected_count"] is not None
+            and current["collected_count"] - previous["collected_count"]
+            >= settings["minimum_collection_gain_alert"]
+        ):
+            collection_delta = current["collected_count"] - previous["collected_count"]
+            insert_alert(
+                "success",
+                "collection_growth",
+                "Collection growth detected",
+                f"{current['model_name']} was added to {collection_delta:,} collections since the previous snapshot.",
+                username=username,
+                snapshot_id=snapshot_id,
+                model_id=model_id,
+                connection=connection,
+            )
+            created += 1
+
         older = older_models.get(model_id)
         if not older or not current_minutes or not older_minutes:
             continue
-        current_delta = current["download_count"] - previous["download_count"]
+        current_delta = download_delta
         previous_delta = previous["download_count"] - older["download_count"]
         current_rate = current_delta / current_minutes
         previous_rate = previous_delta / older_minutes
-        if current_delta >= 10 and previous_delta >= 5 and current_rate >= previous_rate * 2:
+        if (
+            settings["enabled"]["download_velocity_spike"]
+            and current_delta >= settings["velocity_minimum_current_delta"]
+            and previous_delta >= settings["velocity_minimum_previous_delta"]
+            and previous_rate > 0
+            and current_rate >= previous_rate * settings["velocity_spike_multiplier"]
+        ):
             insert_alert(
                 "success",
                 "download_velocity_spike",
@@ -207,8 +243,10 @@ def _create_model_change_alerts(
 
 
 def _create_version_alerts(
-    connection, username: str, snapshot_id: int, previous_snapshot_id: int
+    connection, username: str, snapshot_id: int, previous_snapshot_id: int, settings: dict
 ) -> int:
+    if not settings["enabled"]["new_version"]:
+        return 0
     current_versions = _version_rows(connection, snapshot_id)
     previous_versions = _version_rows(connection, previous_snapshot_id)
     previous_model_ids = set(_model_rows(connection, previous_snapshot_id))
@@ -235,6 +273,7 @@ def _create_version_alerts(
 def generate_snapshot_alerts(
     connection, snapshot_id: int, username: str, warnings: list[str]
 ) -> int:
+    settings = get_alert_settings(connection)
     current_snapshot = dict(
         connection.execute(
             "SELECT id, checked_at FROM snapshot WHERE id = ?", (snapshot_id,)
@@ -252,12 +291,12 @@ def generate_snapshot_alerts(
     created = 0
     if previous_snapshots:
         created += _create_model_change_alerts(
-            connection, username, snapshot_id, current_snapshot, previous_snapshots
+            connection, username, snapshot_id, current_snapshot, previous_snapshots, settings
         )
         created += _create_version_alerts(
-            connection, username, snapshot_id, previous_snapshots[0]["id"]
+            connection, username, snapshot_id, previous_snapshots[0]["id"], settings
         )
-    for warning in warnings:
+    for warning in warnings if settings["enabled"]["snapshot_warning"] else []:
         insert_alert(
             "warning",
             "snapshot_warning",

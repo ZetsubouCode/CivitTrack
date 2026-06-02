@@ -16,10 +16,12 @@ from services.compare_service import (
 from services.config import get_config, list_env_settings, update_env_settings
 from services.db import init_db, list_sync_logs
 from services.export_service import comparison_csv
+from services.quality_service import get_snapshot_quality
+from services.settings_service import get_alert_settings, update_alert_settings
 from services.snapshot_service import delete_snapshot, take_snapshot
 
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 app = Flask(__name__)
 app.config["SECRET_KEY"] = get_config().secret_key
 app.config["MAX_CONTENT_LENGTH"] = MAX_RESTORE_BYTES
@@ -66,6 +68,11 @@ def status():
             "include_minor": config.include_minor,
             "last_snapshot": latest["checked_at"] if latest else None,
             "last_totals": latest,
+            "latest_quality_status": latest["quality_status"] if latest else None,
+            "latest_quality_warning_count": latest["warning_count"] if latest else 0,
+            "database_ready": config.db_path.exists(),
+            "model_type_filter_configured": bool(config.model_types),
+            "cli_scheduler_available": True,
             "app_version": APP_VERSION,
         }
     )
@@ -99,7 +106,7 @@ def snapshot():
     if not isinstance(payload, dict):
         return jsonify({"ok": False, "error": "Snapshot request must be a JSON object."}), 400
     try:
-        result = take_snapshot(note=payload.get("note"))
+        result = take_snapshot(note=payload.get("note"), note_type=payload.get("note_type"))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     return jsonify(result), 200 if result["ok"] else 400
@@ -108,6 +115,11 @@ def snapshot():
 @app.get("/api/snapshots")
 def snapshots():
     return jsonify({"snapshots": list_snapshots()})
+
+
+@app.get("/api/snapshot-quality")
+def snapshot_quality():
+    return _json_action(lambda: get_snapshot_quality(_int_arg("snapshot_id")))
 
 
 @app.delete("/api/snapshots/<int:snapshot_id>")
@@ -193,6 +205,20 @@ def alert_read(alert_id: int):
 @app.post("/api/alerts/read-all")
 def alerts_read_all():
     return _json_action(mark_all_alerts_read)
+
+
+@app.get("/api/alert-settings")
+def alert_settings():
+    return jsonify(get_alert_settings())
+
+
+@app.post("/api/alert-settings")
+def alert_settings_update():
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify({"ok": True, "settings": update_alert_settings(payload)})
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
 
 
 if __name__ == "__main__":

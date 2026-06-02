@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS snapshot (
     api_ok INTEGER NOT NULL DEFAULT 1,
     error TEXT,
     raw_total_item INTEGER,
+    note_type TEXT,
     note TEXT,
     created_at TEXT NOT NULL
 );
@@ -34,12 +35,8 @@ CREATE TABLE IF NOT EXISTS account_snapshot (
     follower_count INTEGER NULL,
     total_download_count INTEGER DEFAULT 0,
     total_reaction_count INTEGER DEFAULT 0,
-    total_favorite_count INTEGER DEFAULT 0,
     total_collected_count INTEGER NULL,
     total_comment_count INTEGER DEFAULT 0,
-    total_rating_count INTEGER DEFAULT 0,
-    total_thumbs_up_count INTEGER DEFAULT 0,
-    total_thumbs_down_count INTEGER DEFAULT 0,
     FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
 );
 CREATE TABLE IF NOT EXISTS model_snapshot (
@@ -58,13 +55,8 @@ CREATE TABLE IF NOT EXISTS model_snapshot (
     cover_image_url TEXT,
     download_count INTEGER DEFAULT 0,
     reaction_count INTEGER DEFAULT 0,
-    favorite_count INTEGER DEFAULT 0,
     collected_count INTEGER NULL,
     comment_count INTEGER DEFAULT 0,
-    rating_count INTEGER DEFAULT 0,
-    rating REAL DEFAULT 0,
-    thumbs_up_count INTEGER DEFAULT 0,
-    thumbs_down_count INTEGER DEFAULT 0,
     raw_json TEXT,
     FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
 );
@@ -78,8 +70,6 @@ CREATE TABLE IF NOT EXISTS model_version_snapshot (
     base_model TEXT,
     published_at TEXT,
     download_count INTEGER DEFAULT 0,
-    rating_count INTEGER DEFAULT 0,
-    rating REAL DEFAULT 0,
     raw_json TEXT,
     FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
 );
@@ -102,6 +92,30 @@ CREATE TABLE IF NOT EXISTS local_alert (
     is_read INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
 );
+CREATE TABLE IF NOT EXISTS app_setting (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS snapshot_quality (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL UNIQUE,
+    quality_status TEXT NOT NULL,
+    rest_model_count INTEGER DEFAULT 0,
+    api_page_count INTEGER DEFAULT 0,
+    minor_discovery_enabled INTEGER DEFAULT 0,
+    minor_discovery_status TEXT,
+    minor_model_count INTEGER DEFAULT 0,
+    collection_metric_status TEXT,
+    collection_metric_count INTEGER DEFAULT 0,
+    creator_profile_status TEXT,
+    follower_count_available INTEGER DEFAULT 0,
+    warning_count INTEGER DEFAULT 0,
+    warnings_json TEXT,
+    info_json TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
+);
 CREATE INDEX IF NOT EXISTS idx_snapshot_checked_at ON snapshot(checked_at);
 CREATE INDEX IF NOT EXISTS idx_model_snapshot_lookup
     ON model_snapshot(snapshot_id, model_id);
@@ -112,6 +126,8 @@ CREATE INDEX IF NOT EXISTS idx_local_alert_inbox
     ON local_alert(username, is_read, id);
 CREATE INDEX IF NOT EXISTS idx_local_alert_snapshot
     ON local_alert(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_snapshot_quality_snapshot
+    ON snapshot_quality(snapshot_id);
 """
 
 
@@ -150,6 +166,8 @@ def init_db() -> None:
         }
         if "note" not in snapshot_columns:
             connection.execute("ALTER TABLE snapshot ADD COLUMN note TEXT")
+        if "note_type" not in snapshot_columns:
+            connection.execute("ALTER TABLE snapshot ADD COLUMN note_type TEXT")
 
 
 def dict_rows(cursor: sqlite3.Cursor) -> list[dict]:

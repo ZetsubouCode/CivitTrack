@@ -8,6 +8,18 @@ from .config import build_model_page_url, get_config
 from .db import insert_sync_log, transaction, utc_now
 
 
+NOTE_TYPES = {
+    "normal_check",
+    "uploaded_new_model",
+    "published_new_version",
+    "changed_preview_images",
+    "updated_model_description",
+    "changed_tags_keywords",
+    "shared_promoted_model",
+    "other_manual_note",
+}
+
+
 def safe_int(value, default: int = 0) -> int:
     try:
         return int(value if value is not None else default)
@@ -29,6 +41,13 @@ def clean_note(value) -> str | None:
     if len(note) > 500:
         raise ValueError("Snapshot note must be 500 characters or fewer.")
     return note or None
+
+
+def clean_note_type(value) -> str:
+    note_type = str(value or "normal_check").strip()
+    if note_type not in NOTE_TYPES:
+        raise ValueError("Snapshot note type is not recognized.")
+    return note_type
 
 
 def deep_get(obj: dict, path: str, default=None):
@@ -55,7 +74,6 @@ def _reaction_count(stats: dict) -> int:
         safe_int(_first_stat(stats, *aliases))
         for aliases in (
             ("thumbsUpCount", "thumbs_up_count", "likeCount"),
-            ("thumbsDownCount", "thumbs_down_count", "dislikeCount"),
             ("heartCount",),
             ("laughCount",),
             ("cryCount",),
@@ -124,12 +142,6 @@ def _normalize_model(item: dict, snapshot_id: int, base_url: str) -> tuple[dict,
             _first_stat(stats, "collectedCount", "collected_count", default=None)
         ),
         "comment_count": safe_int(_first_stat(stats, "commentCount", "comment_count")),
-        "thumbs_up_count": safe_int(
-            _first_stat(stats, "thumbsUpCount", "thumbs_up_count", "likeCount")
-        ),
-        "thumbs_down_count": safe_int(
-            _first_stat(stats, "thumbsDownCount", "thumbs_down_count", "dislikeCount")
-        ),
         "raw_json": _trim_model_json(item),
     }
     version_rows = []
@@ -164,15 +176,73 @@ def _insert_dict(connection, table: str, row: dict) -> None:
     )
 
 
+def _quality_status(models: list[dict], metadata: dict, warnings: list[str]) -> str:
+    if not models:
+        return "warning"
+    extra_statuses = {
+        metadata.get("collection_metric_status"),
+        metadata.get("creator_profile_status"),
+    }
+    if metadata.get("minor_discovery_enabled"):
+        extra_statuses.add(metadata.get("minor_discovery_status"))
+    if warnings or extra_statuses & {"partial", "failed", "unavailable"}:
+        return "partial"
+    return "good"
+
+
+def _insert_snapshot_quality(
+    connection,
+    snapshot_id: int,
+    quality_status: str,
+    metadata: dict,
+    warnings: list[str],
+    info: list[str],
+) -> None:
+    _insert_dict(
+        connection,
+        "snapshot_quality",
+        {
+            "snapshot_id": snapshot_id,
+            "quality_status": quality_status,
+            "rest_model_count": safe_int(metadata.get("rest_model_count")),
+            "api_page_count": safe_int(metadata.get("api_page_count")),
+            "minor_discovery_enabled": int(bool(metadata.get("minor_discovery_enabled"))),
+            "minor_discovery_status": metadata.get("minor_discovery_status"),
+            "minor_model_count": safe_int(metadata.get("minor_model_count")),
+            "collection_metric_status": metadata.get("collection_metric_status"),
+            "collection_metric_count": safe_int(metadata.get("collection_metric_count")),
+            "creator_profile_status": metadata.get("creator_profile_status"),
+            "follower_count_available": int(bool(metadata.get("follower_count_available"))),
+            "warning_count": len(warnings),
+            "warnings_json": json.dumps(warnings, ensure_ascii=True),
+            "info_json": json.dumps(info, ensure_ascii=True),
+            "created_at": utc_now(),
+        },
+    )
+
+
 def _record_failed_snapshot(error: str, source: str) -> None:
     config = get_config()
     now = utc_now()
     with transaction() as connection:
-        connection.execute(
+        cursor = connection.execute(
             "INSERT INTO snapshot "
             "(checked_at, username, source, model_type_filter, api_ok, error, created_at) "
             "VALUES (?, ?, ?, ?, 0, ?, ?)",
             (now, config.username, source, config.model_type_filter, error, now),
+        )
+        _insert_snapshot_quality(
+            connection,
+            cursor.lastrowid,
+            "failed",
+            {
+                "minor_discovery_enabled": config.include_minor,
+                "minor_discovery_status": "failed",
+                "collection_metric_status": "failed",
+                "creator_profile_status": "failed",
+            },
+            [error],
+            [],
         )
         insert_sync_log("error", error, connection)
         insert_alert(
@@ -181,28 +251,34 @@ def _record_failed_snapshot(error: str, source: str) -> None:
             "Snapshot failed",
             error,
             username=config.username,
+            respect_preferences=True,
             connection=connection,
         )
 
 
-def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
+def take_snapshot(
+    source: str = "manual", note: str | None = None, note_type: str | None = None
+) -> dict:
     config = get_config()
     note = clean_note(note)
+    note_type = clean_note_type(note_type)
     if not config.api_key:
         error = "API key is missing. Add CIVITAI_API_KEY to .env, restart the app, then try again."
         insert_sync_log("error", error)
-        insert_alert("error", "snapshot_failed", "Snapshot failed", error)
+        insert_alert("error", "snapshot_failed", "Snapshot failed", error, respect_preferences=True)
         return {"ok": False, "error": error, "warnings": [], "info": []}
     if not config.username:
         error = "Username is missing. Add CIVITAI_USERNAME to .env, restart the app, then try again."
         insert_sync_log("error", error)
-        insert_alert("error", "snapshot_failed", "Snapshot failed", error)
+        insert_alert("error", "snapshot_failed", "Snapshot failed", error, respect_preferences=True)
         return {"ok": False, "error": error, "warnings": [], "info": []}
 
     client = CivitaiClient(config)
     warnings: list[str] = []
     try:
-        models, info, fetch_warnings = client.fetch_models(config.username, config.model_types)
+        models, info, fetch_warnings, metadata = client.fetch_models(
+            config.username, config.model_types
+        )
         warnings.extend(fetch_warnings)
     except CivitaiError as exc:
         error = str(exc)
@@ -214,10 +290,14 @@ def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
         creator = client.fetch_creator(config.username)
     except CivitaiError:
         warnings.append("Creator profile stats were unavailable. Model snapshot was still saved.")
+        metadata["creator_profile_status"] = "failed"
+    else:
+        metadata["creator_profile_status"] = "success" if creator else "unavailable"
     follower_count = None
     if creator:
         follower_value = creator.get("followerCount", creator.get("follower_count"))
         follower_count = safe_int(follower_value) if follower_value is not None else None
+    metadata["follower_count_available"] = follower_count is not None
     if not models:
         warnings.append("No models returned. Check the username or model type filter.")
 
@@ -225,14 +305,15 @@ def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
     with transaction() as connection:
         cursor = connection.execute(
             "INSERT INTO snapshot "
-            "(checked_at, username, source, model_type_filter, api_ok, raw_total_item, note, created_at) "
-            "VALUES (?, ?, ?, ?, 1, ?, ?, ?)",
+            "(checked_at, username, source, model_type_filter, api_ok, raw_total_item, note_type, note, created_at) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
             (
                 checked_at,
                 config.username,
                 source,
                 config.model_type_filter,
                 len(models),
+                note_type,
                 note,
                 checked_at,
             ),
@@ -256,8 +337,6 @@ def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
                 else None
             ),
             "total_comment_count": sum(row["comment_count"] for row in normalized_models),
-            "total_thumbs_up_count": sum(row["thumbs_up_count"] for row in normalized_models),
-            "total_thumbs_down_count": sum(row["thumbs_down_count"] for row in normalized_models),
         }
         _insert_dict(
             connection,
@@ -268,6 +347,10 @@ def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
             _insert_dict(connection, "model_snapshot", row)
         for row in version_rows:
             _insert_dict(connection, "model_version_snapshot", row)
+        quality_status = _quality_status(normalized_models, metadata, warnings)
+        _insert_snapshot_quality(
+            connection, snapshot_id, quality_status, metadata, warnings, info
+        )
         for message in info:
             insert_sync_log("info", message, connection)
         for warning in warnings:
@@ -290,6 +373,7 @@ def take_snapshot(source: str = "manual", note: str | None = None) -> dict:
         "checked_at": checked_at,
         "summary": summary,
         "alert_count": alert_count,
+        "quality_status": quality_status,
     }
 
 
@@ -305,6 +389,7 @@ def delete_snapshot(snapshot_id: int) -> dict:
         deleted_alerts = connection.execute(
             "DELETE FROM local_alert WHERE snapshot_id = ?", (snapshot_id,)
         ).rowcount
+        connection.execute("DELETE FROM snapshot_quality WHERE snapshot_id = ?", (snapshot_id,))
         deleted_versions = connection.execute(
             "DELETE FROM model_version_snapshot WHERE snapshot_id = ?", (snapshot_id,)
         ).rowcount

@@ -58,6 +58,7 @@
         <i class="bi bi-arrow-left-right"></i> Compare Latest
       </button>
       <small><i class="bi bi-shield-check"></i> Your API key stays local.</small>
+      <small id="latestQualityLine">Latest snapshot quality: unavailable</small>
     </div>
   </section>
 
@@ -79,10 +80,11 @@
       <small id="compareHelp" class="ct-help">Need at least 2 snapshots to compare growth.</small>
     </div>
     <div class="ct-action-row">
-      <button class="btn ct-btn-secondary js-compare-latest" type="button">
-        <i class="bi bi-arrow-left-right"></i> Compare Latest vs Previous
-      </button>
+      <button class="btn ct-btn-secondary js-compare-range" type="button" data-range-days="1" data-bs-toggle="tooltip"><i class="bi bi-calendar2-day"></i> 1 Day</button>
+      <button class="btn ct-btn-secondary js-compare-range" type="button" data-range-days="7" data-bs-toggle="tooltip"><i class="bi bi-calendar2-week"></i> 7 Days</button>
+      <button class="btn ct-btn-secondary js-compare-range" type="button" data-range-days="30" data-bs-toggle="tooltip"><i class="bi bi-calendar2-range"></i> 30 Days</button>
     </div>
+    <p class="ct-help">Period shortcuts compare the latest snapshot with the nearest available snapshot on or before the selected period.</p>
     <div class="ct-select-row ct-compare-row">
       <label>From snapshot<select id="fromSnapshot" class="form-select"></select></label>
       <label>To snapshot<select id="toSnapshot" class="form-select"></select></label>
@@ -153,8 +155,8 @@
       </summary>
       <div class="table-responsive ct-table-wrap">
         <table class="table ct-table mb-0">
-          <thead><tr><th>#</th><th>Model</th><th>Version</th><th>Base</th><th>Downloads</th><th>Status</th></tr></thead>
-          <tbody id="versionRows"><tr><td colspan="6" class="ct-table-empty">No comparison selected.</td></tr></tbody>
+          <thead><tr><th>#</th><th>Model</th><th>Version</th><th>Base</th><th>Downloads</th><th>Contribution</th><th>Status</th></tr></thead>
+          <tbody id="versionRows"><tr><td colspan="7" class="ct-table-empty">No comparison selected.</td></tr></tbody>
         </table>
       </div>
       <button id="showAllVersions" class="btn ct-btn-quiet mt-3 d-none" type="button">Show all versions</button>
@@ -205,10 +207,11 @@
       </div>
       <small id="snapshotListHelp" class="ct-help">Loading saved snapshots.</small>
     </div>
+    <p class="ct-help">Source: <strong>Manual</strong> means dashboard capture. <strong>CLI</strong> means <code>python cli.py snapshot</code>. An external scheduler can run that CLI command.</p>
     <div class="table-responsive ct-table-wrap">
       <table class="table ct-table mb-0">
-        <thead><tr><th>Snapshot</th><th>Checked at</th><th>Note</th><th>Source</th><th>Models</th><th>Downloads</th><th>Reactions</th><th>Collections</th><th>Comments</th><th>Action</th></tr></thead>
-        <tbody id="snapshotRows"><tr><td colspan="10" class="ct-table-empty">Loading saved snapshots.</td></tr></tbody>
+        <thead><tr><th>Snapshot</th><th>Checked at</th><th>Note type</th><th>Note</th><th>Source</th><th>Quality</th><th>Models</th><th>Downloads</th><th>Reactions</th><th>Collections</th><th>Comments</th><th>Action</th></tr></thead>
+        <tbody id="snapshotRows"><tr><td colspan="12" class="ct-table-empty">Loading saved snapshots.</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -243,6 +246,18 @@
   </div>
 
   <div id="settingsView" class="ct-view d-none" data-view-panel="settings">
+  <section class="ct-card ct-setup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">First-run readiness</span>
+        <h2>Setup Checklist</h2>
+      </div>
+      <span id="checklistPill" class="ct-pill ct-pill-muted">Checking</span>
+    </div>
+    <div id="setupChecklist" class="ct-checklist"></div>
+    <p id="setupNextStep" class="ct-help"></p>
+  </section>
+
   <section class="ct-card ct-setup ct-settings-editor">
     <div class="ct-section-heading">
       <div>
@@ -324,6 +339,41 @@
     </form>
   </section>
 
+  <section class="ct-card ct-setup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Local notifications</span>
+        <h2>Alert Preferences</h2>
+      </div>
+    </div>
+    <p class="ct-help">Tune which local alerts CivitTrack should create after each snapshot.</p>
+    <form id="alertSettingsForm">
+      <div id="alertToggleGrid" class="ct-toggle-grid"></div>
+      <details class="ct-advanced">
+        <summary>Advanced alert thresholds</summary>
+        <div class="ct-settings-grid">
+          <label class="ct-setting-field">Download milestones<input id="alertMilestones" class="form-control" type="text"></label>
+          <label class="ct-setting-field">Minimum download gain<input id="alertMinimumDownloads" class="form-control" type="number" min="1" step="1"></label>
+          <label class="ct-setting-field">Minimum collection gain<input id="alertMinimumCollections" class="form-control" type="number" min="1" step="1"></label>
+          <label class="ct-setting-field">Velocity spike multiplier<input id="alertVelocityMultiplier" class="form-control" type="number" min="0.1" step="0.1"></label>
+          <label class="ct-setting-field">Velocity minimum current gain<input id="alertVelocityCurrent" class="form-control" type="number" min="1" step="1"></label>
+          <label class="ct-setting-field">Velocity minimum previous gain<input id="alertVelocityPrevious" class="form-control" type="number" min="1" step="1"></label>
+        </div>
+      </details>
+      <div class="ct-settings-actions"><button id="saveAlertSettings" class="btn ct-btn-primary" type="submit"><i class="bi bi-floppy"></i> Save Alert Preferences</button></div>
+    </form>
+  </section>
+
+  <section class="ct-card ct-setup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Snapshot source</span>
+        <h2>Dashboard And Scheduler Captures</h2>
+      </div>
+    </div>
+    <p class="ct-help mb-0"><strong>Manual</strong> snapshots come from the dashboard button. <strong>CLI</strong> snapshots come from <code>python cli.py snapshot</code>, including runs started by Windows Task Scheduler or cron. <strong>Scheduled</strong> is reserved for future scheduler integrations.</p>
+  </section>
+
   <section class="ct-card ct-data-tools">
     <div class="ct-section-heading">
       <div>
@@ -352,15 +402,39 @@
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
+        <div id="snapshotSoonWarning" class="ct-inline-warning d-none"></div>
+        <label class="ct-note-field" for="snapshotNoteType">Note type</label>
+        <select id="snapshotNoteType" class="form-select mb-3">
+          <option value="normal_check">Normal check / no special change</option>
+          <option value="uploaded_new_model">Uploaded new model</option>
+          <option value="published_new_version">Published new version</option>
+          <option value="changed_preview_images">Changed preview images</option>
+          <option value="updated_model_description">Updated model description</option>
+          <option value="changed_tags_keywords">Changed tags / keywords</option>
+          <option value="shared_promoted_model">Shared/promoted model</option>
+          <option value="other_manual_note">Other manual note</option>
+        </select>
         <label class="ct-note-field" for="snapshotNote">Optional note</label>
         <textarea id="snapshotNote" class="form-control ct-note-input" maxlength="500" rows="4" placeholder="Example: published new preview images or updated tags"></textarea>
-        <small class="ct-help ct-note-help">This note is stored locally with the snapshot.</small>
+        <small class="ct-help ct-note-help">Use this to remember what changed before this snapshot. The note stays local.</small>
       </div>
       <div class="modal-footer">
         <button class="btn ct-btn-quiet" type="button" data-bs-dismiss="modal">Cancel</button>
         <button id="confirmSnapshot" class="btn ct-btn-primary" type="submit"><i class="bi bi-camera"></i> Take Snapshot</button>
       </div>
     </form>
+  </div>
+</div>
+
+<div class="modal fade ct-modal" id="qualityModal" tabindex="-1" aria-labelledby="qualityModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div><span class="ct-eyebrow">Stored snapshot detail</span><h2 id="qualityModalTitle" class="modal-title">Snapshot Quality Report</h2></div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div id="qualityModalBody" class="modal-body"></div>
+    </div>
   </div>
 </div>
 

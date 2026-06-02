@@ -57,7 +57,9 @@ class CivitaiClient:
             return payload
         raise CivitaiError("CivitAI is temporarily unavailable. Try again later.")
 
-    def _fetch_rest_models(self, username: str, model_types: list[str]) -> tuple[list[dict], list[str]]:
+    def _fetch_rest_models(
+        self, username: str, model_types: list[str]
+    ) -> tuple[list[dict], list[str], int]:
         url = f"{self.config.base_url}/api/v1/models"
         params = {
             "username": username,
@@ -69,9 +71,11 @@ class CivitaiClient:
         items: list[dict] = []
         info: list[str] = []
         visited: set[str] = set()
+        api_page_count = 0
 
         for page_number in range(1, self.config.max_pages + 1):
             payload = self.get_json(url, params=params)
+            api_page_count += 1
             page_items = payload.get("items") or []
             if not isinstance(page_items, list):
                 raise CivitaiError("CivitAI returned an unexpected models list.")
@@ -90,7 +94,7 @@ class CivitaiClient:
             params = None
         else:
             info.append(f"Stopped at configured page limit ({self.config.max_pages}).")
-        return items, info
+        return items, info, api_page_count
 
     def _fetch_creator_models(self, username: str, model_types: list[str]) -> list[dict]:
         url = f"{self.config.base_url}/api/trpc/model.getAll"
@@ -146,9 +150,20 @@ class CivitaiClient:
 
     def fetch_models(
         self, username: str, model_types: list[str]
-    ) -> tuple[list[dict], list[str], list[str]]:
-        items, info = self._fetch_rest_models(username, model_types)
+    ) -> tuple[list[dict], list[str], list[str], dict]:
+        items, info, api_page_count = self._fetch_rest_models(username, model_types)
         warnings: list[str] = []
+        metadata = {
+            "rest_model_count": len(items),
+            "api_page_count": api_page_count,
+            "creator_models_available": False,
+            "creator_model_count": 0,
+            "minor_discovery_enabled": self.config.include_minor,
+            "minor_discovery_status": "skipped" if not self.config.include_minor else "unavailable",
+            "minor_model_count": 0,
+            "collection_metric_status": "unavailable",
+            "collection_metric_count": 0,
+        }
         try:
             creator_models = self._fetch_creator_models(username, model_types)
         except CivitaiError:
@@ -159,12 +174,17 @@ class CivitaiClient:
                 warnings.append(
                     "Minor-model discovery was unavailable. Saved the standard CivitAI REST catalog only."
                 )
-            return items, info, warnings
+            return items, info, warnings, metadata
+
+        metadata["creator_models_available"] = True
+        metadata["creator_model_count"] = len(creator_models)
 
         if not self.config.include_minor:
             enriched = self._enrich_collection_counts(items, creator_models)
+            metadata["collection_metric_count"] = enriched
+            metadata["collection_metric_status"] = "success" if enriched == len(items) else "partial"
             info.append(f"Loaded collection metrics for {enriched} creator models.")
-            return items, info, warnings
+            return items, info, warnings, metadata
 
         known_ids = {item.get("id") for item in items}
         creator_model_ids = {
@@ -178,6 +198,10 @@ class CivitaiClient:
             except CivitaiError:
                 failed_ids.append(model_id)
         enriched = self._enrich_collection_counts(items, creator_models)
+        metadata["minor_model_count"] = len(missing_ids) - len(failed_ids)
+        metadata["minor_discovery_status"] = "partial" if failed_ids else "success"
+        metadata["collection_metric_count"] = enriched
+        metadata["collection_metric_status"] = "success" if enriched == len(items) else "partial"
         info.append(f"Loaded collection metrics for {enriched} creator models.")
         info.append(
             f"Minor-model discovery found {len(missing_ids)} additional creator models."
@@ -187,7 +211,7 @@ class CivitaiClient:
                 f"Could not load {len(failed_ids)} additional minor models. "
                 "Saved the models that were available."
             )
-        return items, info, warnings
+        return items, info, warnings, metadata
 
     def fetch_creator(self, username: str) -> dict | None:
         payload = self.get_json(

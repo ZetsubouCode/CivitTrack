@@ -24,6 +24,12 @@ if not exist ".env.example" (
     goto :fail
 )
 
+if exist ".venv\bin\python" if not exist "%VENV_PYTHON%" (
+    echo ERROR: The existing .venv folder was created for Linux.
+    echo Remove the .venv folder, then run this installer again on Windows.
+    goto :fail
+)
+
 if not exist "%VENV_PYTHON%" (
     echo Creating the local Python environment...
     call :find_python
@@ -41,6 +47,13 @@ if not exist "%VENV_PYTHON%" (
         echo ERROR: Python could not create the .venv folder.
         goto :fail
     )
+)
+
+"%VENV_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+if errorlevel 1 (
+    echo ERROR: The local .venv uses Python older than 3.10.
+    echo Remove the .venv folder, install a current Python release, then run this installer again.
+    goto :fail
 )
 
 echo Installing or updating CivitTrack requirements...

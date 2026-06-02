@@ -24,10 +24,11 @@ def list_snapshots(username: str | None = None) -> list[dict]:
         return dict_rows(
             connection.execute(
                 "SELECT s.id, s.checked_at, s.source, s.model_type_filter, s.raw_total_item, "
-                "s.note, "
+                "s.note_type, s.note, q.quality_status, q.warning_count, "
                 "a.model_count, a.follower_count, a.total_download_count, "
                 "a.total_reaction_count, a.total_collected_count, a.total_comment_count "
                 "FROM snapshot s JOIN account_snapshot a ON a.snapshot_id = s.id "
+                "LEFT JOIN snapshot_quality q ON q.snapshot_id = s.id "
                 "WHERE s.username = ? AND s.api_ok = 1 ORDER BY s.checked_at DESC, s.id DESC",
                 (username,),
             )
@@ -59,7 +60,7 @@ def get_latest_breakdown(username: str | None = None) -> dict:
 
 def _load_snapshot(connection, snapshot_id: int) -> dict | None:
     row = connection.execute(
-        "SELECT s.id, s.checked_at, s.username, a.* FROM snapshot s "
+        "SELECT s.id, s.checked_at, s.username, s.source, s.note_type, s.note, a.* FROM snapshot s "
         "JOIN account_snapshot a ON a.snapshot_id = s.id WHERE s.id = ? AND s.api_ok = 1",
         (snapshot_id,),
     ).fetchone()
@@ -137,37 +138,48 @@ def compare_snapshots(from_id: int, to_id: int) -> dict:
             reverse=True,
         )
         old_versions = {
-            row["model_version_id"]: dict(row)
+            (row["model_id"], row["model_version_id"]): dict(row)
             for row in connection.execute(
                 "SELECT * FROM model_version_snapshot WHERE snapshot_id = ?", (from_id,)
             )
         }
         new_versions = {
-            row["model_version_id"]: dict(row)
+            (row["model_id"], row["model_version_id"]): dict(row)
             for row in connection.execute(
                 "SELECT * FROM model_version_snapshot WHERE snapshot_id = ?", (to_id,)
             )
         }
         versions = []
-        for version_id in sorted(old_versions.keys() | new_versions.keys()):
-            old = old_versions.get(version_id)
-            new = new_versions.get(version_id)
+        model_download_deltas = {
+            row["model_id"]: row["download_count_delta"] for row in models
+        }
+        for version_key in sorted(old_versions.keys() | new_versions.keys()):
+            old = old_versions.get(version_key)
+            new = new_versions.get(version_key)
             current = new or old
+            model_download_delta = model_download_deltas.get(current["model_id"])
+            version_download_delta = (
+                _delta(old["download_count"] if old else 0, new["download_count"] if new else 0)
+                if new
+                else 0
+            )
             status = "normal" if old and new else "new_in_current" if new else "missing_in_current"
             versions.append(
                 {
                     "model_id": current["model_id"],
                     "model_name": current["model_name"],
-                    "model_version_id": version_id,
+                    "model_version_id": current["model_version_id"],
                     "version_name": current["version_name"],
                     "base_model": current["base_model"],
                     "old_download_count": old["download_count"] if old else 0,
                     "new_download_count": new["download_count"] if new else None,
-                    "download_count_delta": _delta(
-                        old["download_count"] if old else 0, new["download_count"] if new else 0
-                    )
-                    if new
-                    else 0,
+                    "download_count_delta": version_download_delta,
+                    "model_download_delta": model_download_delta,
+                    "version_contribution_percent": (
+                        round(version_download_delta / model_download_delta * 100, 1)
+                        if model_download_delta and model_download_delta > 0
+                        else None
+                    ),
                     "status": status,
                 }
             )
@@ -199,6 +211,18 @@ def compare_snapshots(from_id: int, to_id: int) -> dict:
         "from_totals": old_account,
         "to_totals": new_account,
         "summary": summary,
+        "from_context": {
+            "checked_at": old_account["checked_at"],
+            "source": old_account["source"],
+            "note_type": old_account["note_type"],
+            "note": old_account["note"],
+        },
+        "to_context": {
+            "checked_at": new_account["checked_at"],
+            "source": new_account["source"],
+            "note_type": new_account["note_type"],
+            "note": new_account["note"],
+        },
         "models": models,
         "missing_models": missing_models,
         "versions": versions,

@@ -25,6 +25,14 @@
     <i class="bi bi-boxes"></i>
     <span>Models</span>
   </button>
+  <button class="ct-side-tab" type="button" data-view="images" aria-controls="imagesView" aria-selected="false" title="Images">
+    <i class="bi bi-images"></i>
+    <span>Images</span>
+  </button>
+  <button class="ct-side-tab" type="button" data-view="articles" aria-controls="articlesView" aria-selected="false" title="Articles">
+    <i class="bi bi-newspaper"></i>
+    <span>Articles</span>
+  </button>
   <button class="ct-side-tab" type="button" data-view="buzz" aria-controls="buzzView" aria-selected="false" title="Buzz">
     <i class="bi bi-lightning-charge-fill"></i>
     <span>Buzz</span>
@@ -52,7 +60,7 @@
     <div>
       <span class="ct-eyebrow"><i class="bi bi-graph-up-arrow"></i> Local creator intelligence</span>
       <h1>Track what actually grows.</h1>
-      <p>Take CivitAI stat snapshots, compare them, and see which LoRA gained downloads, reactions, collection adds, and comments.</p>
+      <p>Take CivitAI stat snapshots, compare them, and see which LoRA gained downloads, reactions, collection adds, and generations.</p>
     </div>
     <div class="ct-hero-actions">
       <button class="btn ct-btn-primary js-snapshot" type="button">
@@ -127,24 +135,32 @@
       </div>
       <label class="ct-search"><i class="bi bi-search"></i><input id="modelSearch" type="search" placeholder="Search model name"></label>
     </div>
-    <div class="ct-filter-row" id="modelFilters">
-      <button class="ct-filter active" data-filter="all">All Growth</button>
-      <button class="ct-filter" data-filter="download_count">Downloads</button>
-      <button class="ct-filter" data-filter="reaction_count">Reactions</button>
-      <button class="ct-filter" data-filter="collected_count">Collections</button>
-      <button class="ct-filter" data-filter="comment_count">Comments</button>
+    <div class="ct-dropdown-toolbar">
+      <label class="ct-filter-field" for="modelFilterSelect">
+        <span>Show</span>
+        <select id="modelFilterSelect" class="form-select">
+          <option value="all">All growth</option>
+          <option value="download_count">Downloads changed</option>
+          <option value="reaction_count">Reactions changed</option>
+          <option value="collected_count">Collections changed</option>
+          <option value="generation_count">Generations changed</option>
+        </select>
+      </label>
+      <label class="ct-filter-field" for="modelSortSelect">
+        <span>Sort</span>
+        <select id="modelSortSelect" class="form-select">
+          <option value="newest">Newest original</option>
+          <option value="oldest">Oldest original</option>
+          <option value="download_count">Downloads delta</option>
+          <option value="reaction_count">Reactions delta</option>
+          <option value="generation_count">Generations delta</option>
+        </select>
+      </label>
       <label class="ct-check"><input id="showUnchanged" type="checkbox"> Show unchanged models</label>
-    </div>
-    <div class="ct-sort-row ct-growth-sort-row" id="modelSorts">
-      <span>Sort</span>
-      <button class="ct-filter active" data-model-sort="newest">Newest</button>
-      <button class="ct-filter" data-model-sort="oldest">Oldest</button>
-      <button class="ct-filter" data-model-sort="download_count">Downloads delta</button>
-      <button class="ct-filter" data-model-sort="reaction_count">Reactions delta</button>
     </div>
     <div class="table-responsive ct-table-wrap">
       <table class="table ct-table mb-0">
-        <thead><tr><th>#</th><th>Model</th><th>Published</th><th>Type</th><th>Base</th><th>Downloads</th><th>Reactions</th><th>Collections</th><th>Comments</th><th>Latest version</th><th>Link</th></tr></thead>
+        <thead><tr><th>#</th><th>Model</th><th>Last Check</th><th>Type</th><th>Base</th><th>Downloads</th><th>Reactions</th><th>Collections</th><th>Generations</th><th>Version</th><th>Link</th></tr></thead>
         <tbody id="modelRows"><tr><td colspan="11" class="ct-table-empty">Take two snapshots to reveal model growth.</td></tr></tbody>
       </table>
     </div>
@@ -159,7 +175,7 @@
       </summary>
       <div class="table-responsive ct-table-wrap">
         <table class="table ct-table mb-0">
-          <thead><tr><th>#</th><th>Model</th><th>Version</th><th>Base</th><th>Downloads</th><th>Contribution</th><th>Status</th></tr></thead>
+          <thead><tr><th>#</th><th>Model</th><th>Version</th><th>Base</th><th>Downloads</th><th>Generations</th><th>Contribution</th><th>Status</th></tr></thead>
           <tbody id="versionRows"><tr><td colspan="7" class="ct-table-empty">No comparison selected.</td></tr></tbody>
         </table>
       </div>
@@ -183,23 +199,125 @@
         <button class="ct-filter active" data-breakdown-metric="download_count">Downloads</button>
         <button class="ct-filter" data-breakdown-metric="reaction_count">Reactions</button>
         <button class="ct-filter" data-breakdown-metric="collected_count">Collections</button>
+        <button class="ct-filter" data-breakdown-metric="generation_count">Generations</button>
       </div>
       <div class="ct-sort-row" id="breakdownSorts">
         <span>Sort</span>
         <button class="ct-filter active" data-breakdown-sort="metric">Top first</button>
-        <button class="ct-filter" data-breakdown-sort="newest">Newest</button>
-        <button class="ct-filter" data-breakdown-sort="oldest">Oldest</button>
+        <button class="ct-filter" data-breakdown-sort="newest">Newest original</button>
+        <button class="ct-filter" data-breakdown-sort="oldest">Oldest original</button>
       </div>
       <small id="breakdownHelp" class="ct-help">Take a snapshot to see which models make up your totals.</small>
     </div>
     <div class="table-responsive ct-table-wrap ct-breakdown-wrap">
       <table class="table ct-table ct-breakdown-table mb-0">
-        <thead><tr><th>#</th><th>Model</th><th>Published</th><th id="breakdownMetricHeading">Downloads</th><th>Reactions</th><th>Collections</th><th>Share</th><th>Latest version</th><th>Link</th></tr></thead>
-        <tbody id="breakdownRows"><tr><td colspan="9" class="ct-table-empty">Take a snapshot to see your current model totals.</td></tr></tbody>
+        <thead><tr><th>#</th><th>Model</th><th>Last Check</th><th id="breakdownMetricHeading">Downloads</th><th>Reactions</th><th>Collections</th><th>Generations</th><th>Share</th><th>Version</th><th>Link</th></tr></thead>
+        <tbody id="breakdownRows"><tr><td colspan="10" class="ct-table-empty">Take a snapshot to see your current model totals.</td></tr></tbody>
       </table>
     </div>
   </section>
 
+  </div>
+
+  <div id="imagesView" class="ct-view d-none" data-view-panel="images">
+  <section class="ct-hero ct-card">
+    <div>
+      <span class="ct-eyebrow"><i class="bi bi-images"></i> Public LoRA usage</span>
+      <h1>Image Gallery</h1>
+      <p>Browse public CivitAI images and posts linked to your stored LoRA model versions. The gallery keeps results local after sync and renders only the visible cards while scrolling.</p>
+    </div>
+    <div class="ct-hero-actions">
+      <button class="btn ct-btn-primary js-image-sync" type="button"><i class="bi bi-cloud-arrow-down"></i> Sync Images</button>
+      <button id="imageRefresh" class="btn ct-btn-secondary" type="button"><i class="bi bi-arrow-repeat"></i> Refresh Gallery</button>
+      <small id="imageSyncHelp">Take a model snapshot first, then sync public images.</small>
+    </div>
+  </section>
+
+  <section id="imageMetricsGrid" class="ct-metrics" aria-label="Image usage summary"></section>
+
+  <section class="ct-card ct-gallery-card">
+    <div class="ct-section-heading ct-table-heading">
+      <div>
+        <span class="ct-eyebrow">Stored public images</span>
+        <h2>Gallery</h2>
+      </div>
+      <label class="ct-search"><i class="bi bi-search"></i><input id="imageSearch" type="search" placeholder="Search model, creator, image ID"></label>
+    </div>
+    <div class="ct-gallery-toolbar">
+      <label>Find model<input id="imageModelOptionSearch" class="form-control" type="search" placeholder="Filter model list"></label>
+      <label>Model<select id="imageModelFilter" class="form-select"><option value="">All models</option></select></label>
+      <label>Version<select id="imageVersionFilter" class="form-select"><option value="">All versions</option></select></label>
+      <label>Sort<select id="imageSort" class="form-select"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="reactions">Most reactions</option><option value="comments">Most comments</option></select></label>
+      <div class="ct-filter-field">
+        <span>Rating</span>
+        <div class="ct-filter-row ct-chip-row" id="imageRatingFilters" aria-label="Image rating filters">
+          <button class="ct-filter active" type="button" data-rating="all" aria-pressed="true">All</button>
+          <button class="ct-filter" type="button" data-rating="pg" aria-pressed="false">PG</button>
+          <button class="ct-filter" type="button" data-rating="pg13" aria-pressed="false">PG-13</button>
+          <button class="ct-filter" type="button" data-rating="r" aria-pressed="false">R</button>
+          <button class="ct-filter" type="button" data-rating="x" aria-pressed="false">X</button>
+          <button class="ct-filter" type="button" data-rating="xxx" aria-pressed="false">XXX</button>
+        </div>
+      </div>
+      <label class="ct-toggle-row ct-gallery-owner-filter"><span>Hide my images</span><input id="imageHideOwn" type="checkbox" checked></label>
+      <button class="btn ct-btn-secondary js-image-sync" type="button"><i class="bi bi-cloud-arrow-down"></i> Sync Images</button>
+    </div>
+    <p id="imageGalleryHelp" class="ct-help">Sync images to populate the local gallery.</p>
+    <div id="imageScroller" class="ct-gallery-scroller" tabindex="0" aria-label="Public images linked to your LoRA versions">
+      <div id="imageVirtualSpace" class="ct-gallery-space">
+        <div id="imageGrid" class="ct-gallery-grid"></div>
+      </div>
+    </div>
+  </section>
+  </div>
+
+  <div id="articlesView" class="ct-view d-none" data-view-panel="articles">
+  <section class="ct-hero ct-card">
+    <div>
+      <span class="ct-eyebrow"><i class="bi bi-newspaper"></i> Creator article performance</span>
+      <h1>Article Progress</h1>
+      <p>Track published CivitAI articles locally, including views, collections, reactions, comments, and tipped Buzz totals with gains from the previous article sync.</p>
+    </div>
+    <div class="ct-hero-actions">
+      <button class="btn ct-btn-primary js-article-sync" type="button"><i class="bi bi-cloud-arrow-down"></i> Sync Articles</button>
+      <button id="articleRefresh" class="btn ct-btn-secondary" type="button"><i class="bi bi-arrow-repeat"></i> Refresh Articles</button>
+      <small id="articleSyncHelp">Sync articles to populate local progress.</small>
+    </div>
+  </section>
+
+  <section id="articleMetricsGrid" class="ct-metrics" aria-label="Article progress summary"></section>
+
+  <section class="ct-card ct-table-card">
+    <div class="ct-section-heading ct-table-heading">
+      <div>
+        <span class="ct-eyebrow">Stored creator articles</span>
+        <h2>Article Progress</h2>
+      </div>
+      <label class="ct-search"><i class="bi bi-search"></i><input id="articleSearch" type="search" placeholder="Search article title, tag, ID"></label>
+    </div>
+    <div class="ct-article-toolbar">
+      <label>Sort<select id="articleSort" class="form-select"><option value="published_desc">Newest published</option><option value="published_asc">Oldest published</option><option value="views">Most views</option><option value="collections">Most collections</option><option value="reactions">Most reactions</option><option value="tips">Most tipped Buzz</option><option value="comments">Most comments</option></select></label>
+      <div class="ct-filter-field">
+        <span>Rating</span>
+        <div class="ct-filter-row ct-chip-row" id="articleRatingFilters" aria-label="Article rating filters">
+          <button class="ct-filter active" type="button" data-rating="all" aria-pressed="true">All</button>
+          <button class="ct-filter" type="button" data-rating="pg" aria-pressed="false">PG</button>
+          <button class="ct-filter" type="button" data-rating="pg13" aria-pressed="false">PG-13</button>
+          <button class="ct-filter" type="button" data-rating="r" aria-pressed="false">R</button>
+          <button class="ct-filter" type="button" data-rating="x" aria-pressed="false">X</button>
+          <button class="ct-filter" type="button" data-rating="xxx" aria-pressed="false">XXX</button>
+        </div>
+      </div>
+      <button class="btn ct-btn-secondary js-article-sync" type="button"><i class="bi bi-cloud-arrow-down"></i> Sync Articles</button>
+    </div>
+    <p id="articleTableHelp" class="ct-help">Sync articles to populate local progress.</p>
+    <div class="table-responsive ct-table-wrap">
+      <table class="table ct-table ct-article-table mb-0">
+        <thead><tr><th>Published</th><th>Article</th><th>Rating</th><th>Views</th><th>Collections</th><th>Reactions</th><th>Breakdown</th><th>Comments</th><th>Tips</th><th>Link</th></tr></thead>
+        <tbody id="articleRows"><tr><td colspan="10" class="ct-table-empty">Sync articles to start tracking progress.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
   </div>
 
   <div id="buzzView" class="ct-view d-none" data-view-panel="buzz">
@@ -237,39 +355,44 @@
       </div>
       <label class="ct-search"><i class="bi bi-search"></i><input id="buzzSearch" type="search" placeholder="Search source or description"></label>
     </div>
-    <div class="ct-filter-section">
-      <span>Account</span>
-      <div class="ct-filter-row" id="buzzAccountFilters">
-        <button class="ct-filter active" type="button" data-buzz-account="all">All</button>
-        <button class="ct-filter" type="button" data-buzz-account="Blue">Blue</button>
-        <button class="ct-filter" type="button" data-buzz-account="Yellow">Yellow</button>
-        <button class="ct-filter" type="button" data-buzz-account="Green">Green</button>
+    <div class="ct-buzz-filter-panel" aria-label="Buzz activity filters">
+      <label class="ct-filter-field" for="buzzAccountFilter">
+        <span><i class="bi bi-wallet2"></i> Account</span>
+        <select id="buzzAccountFilter" class="form-select">
+          <option value="all">All accounts</option>
+          <option value="Blue">Blue Buzz</option>
+          <option value="Yellow">Yellow Buzz</option>
+          <option value="Green">Green Buzz</option>
+        </select>
+      </label>
+      <label class="ct-filter-field ct-filter-field-wide" for="buzzCategoryFilter">
+        <span><i class="bi bi-tags"></i> Event</span>
+        <select id="buzzCategoryFilter" class="form-select">
+          <option value="all">All events</option>
+          <option value="model">Models</option>
+          <option value="image">Images</option>
+          <option value="article">Articles</option>
+          <option value="comment">Comments</option>
+          <option value="tip">Tips</option>
+          <option value="reward">Rewards</option>
+          <option value="spend">Spending</option>
+          <option value="unknown">Unknown</option>
+        </select>
+      </label>
+      <label class="ct-filter-field" for="buzzDirectionFilter">
+        <span><i class="bi bi-arrow-left-right"></i> Direction</span>
+        <select id="buzzDirectionFilter" class="form-select">
+          <option value="all">All directions</option>
+          <option value="gained">Gained</option>
+          <option value="spent">Spent</option>
+        </select>
+      </label>
+      <div class="ct-buzz-filter-actions">
+        <button id="clearBuzzFilters" class="btn ct-btn-quiet" type="button"><i class="bi bi-x-circle"></i> Clear Filters</button>
+        <button class="btn ct-btn-secondary js-buzz-check" type="button"><i class="bi bi-arrow-repeat"></i> Run Buzz Check</button>
       </div>
     </div>
-    <div class="ct-filter-section">
-      <span>Event</span>
-      <div class="ct-filter-row" id="buzzCategoryFilters">
-        <button class="ct-filter active" type="button" data-buzz-category="all">All</button>
-        <button class="ct-filter" type="button" data-buzz-category="model">Model</button>
-        <button class="ct-filter" type="button" data-buzz-category="image">Image</button>
-        <button class="ct-filter" type="button" data-buzz-category="tip">Tips</button>
-        <button class="ct-filter" type="button" data-buzz-category="reward">Rewards</button>
-        <button class="ct-filter" type="button" data-buzz-category="spend">Spending</button>
-        <button class="ct-filter" type="button" data-buzz-category="unknown">Unknown</button>
-      </div>
-    </div>
-    <div class="ct-filter-section ct-buzz-toolbar">
-      <div>
-        <span>Direction</span>
-        <div class="ct-filter-row" id="buzzDirectionFilters">
-          <button class="ct-filter active" type="button" data-buzz-direction="all">All</button>
-          <button class="ct-filter" type="button" data-buzz-direction="gained">Gained</button>
-          <button class="ct-filter" type="button" data-buzz-direction="spent">Spent</button>
-        </div>
-      </div>
-      <button class="btn ct-btn-secondary js-buzz-check" type="button"><i class="bi bi-arrow-repeat"></i> Run Buzz Check</button>
-    </div>
-    <p class="ct-help">Unknown and unmatched transactions are normal. Match confidence is direct only when CivitAI returns a model or image identifier.</p>
+    <p id="buzzFilterSummary" class="ct-help">Unknown and unmatched transactions are normal. Match confidence is direct only when CivitAI returns a model or image identifier.</p>
     <div class="table-responsive ct-table-wrap">
       <table class="table ct-table mb-0">
         <thead><tr><th>Date</th><th>Buzz</th><th>Account</th><th>Event</th><th>Source</th><th>Description</th><th>Match</th><th>Link</th></tr></thead>
@@ -291,8 +414,8 @@
     <p class="ct-help">Source: <strong>Manual</strong> means dashboard capture. <strong>CLI</strong> means <code>python cli.py snapshot</code>. An external scheduler can run that CLI command.</p>
     <div class="table-responsive ct-table-wrap">
       <table class="table ct-table mb-0">
-        <thead><tr><th>Snapshot</th><th>Checked at</th><th>Note type</th><th>Note</th><th>Source</th><th>Quality</th><th>Models</th><th>Downloads</th><th>Reactions</th><th>Collections</th><th>Comments</th><th>Action</th></tr></thead>
-        <tbody id="snapshotRows"><tr><td colspan="12" class="ct-table-empty">Loading saved snapshots.</td></tr></tbody>
+        <thead><tr><th>Snapshot</th><th>Checked at</th><th>Note type</th><th>Note</th><th>Source</th><th>Quality</th><th>Models</th><th>Downloads</th><th>Reactions</th><th>Collections</th><th>Generations</th><th>Comments</th><th>Action</th></tr></thead>
+        <tbody id="snapshotRows"><tr><td colspan="13" class="ct-table-empty">Loading saved snapshots.</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -397,6 +520,11 @@
           <input id="settingMaxPages" class="form-control" type="number" min="1" step="1" name="CIVITAI_MAX_PAGES">
         </div>
         <div class="ct-setting-field">
+          <label for="settingReactionWarningLimit">Reaction bonus reminder</label>
+          <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Warn before sending more reactions after this many added reactions today. Set to 0 to disable the reminder."><i class="bi bi-question-circle"></i></button>
+          <input id="settingReactionWarningLimit" class="form-control" type="number" min="0" step="1" name="REACTION_DAILY_BONUS_WARNING_LIMIT">
+        </div>
+        <div class="ct-setting-field">
           <label for="settingHost">Application host</label>
           <button class="ct-tooltip" type="button" data-bs-toggle="tooltip" title="Network interface where the local web server listens. Changing this takes effect after restarting the app."><i class="bi bi-question-circle"></i></button>
           <input id="settingHost" class="form-control" type="text" name="APP_HOST">
@@ -483,6 +611,20 @@
     <p class="ct-help mb-0"><strong>Manual</strong> snapshots come from the dashboard button. <strong>CLI</strong> snapshots come from <code>python cli.py snapshot</code>, including runs started by Windows Task Scheduler or cron. <strong>Scheduled</strong> is reserved for future scheduler integrations.</p>
   </section>
 
+  <section class="ct-card ct-setup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Local image cache</span>
+        <h2>Thumbnail Cache</h2>
+      </div>
+    </div>
+    <p class="ct-inline-warning">Clearing the cache deletes local thumbnail files under <code>storage/image-cache/</code>. It does not delete SQLite history, CivitAI images, reactions, comments, or model data. Thumbnails will be downloaded again as you browse.</p>
+    <div class="ct-settings-actions">
+      <button id="clearImageCache" class="btn ct-btn-danger" type="button"><i class="bi bi-trash3"></i> Clear Thumbnail Cache</button>
+      <small id="imageCacheClearHelp" class="ct-help"></small>
+    </div>
+  </section>
+
   <section class="ct-card ct-data-tools">
     <div class="ct-section-heading">
       <div>
@@ -526,6 +668,10 @@
         <label class="ct-note-field" for="snapshotNote">Optional note</label>
         <textarea id="snapshotNote" class="form-control ct-note-input" maxlength="500" rows="4" placeholder="Example: published new preview images or updated tags"></textarea>
         <small class="ct-help ct-note-help">Use this to remember what changed before this snapshot. The note stays local.</small>
+        <div id="snapshotProgress" class="ct-progress-cue d-none" aria-live="polite">
+          <span class="spinner-border spinner-border-sm"></span>
+          <span>Fetching model stats and batched generation metrics from CivitAI.</span>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn ct-btn-quiet" type="button" data-bs-dismiss="modal">Cancel</button>
@@ -561,5 +707,17 @@
     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
   </div>
   <div id="buzzDrawerBody" class="offcanvas-body"></div>
+</div>
+
+<div class="modal fade ct-modal ct-image-modal" id="imageModal" tabindex="-1" aria-labelledby="imageModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div><span class="ct-eyebrow">Stored public image</span><h2 id="imageModalTitle" class="modal-title">Image Detail</h2></div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div id="imageModalBody" class="modal-body"></div>
+    </div>
+  </div>
 </div>
 {% endblock %}

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from services.compare_service import compare_latest_previous, list_snapshots
 from services.buzz_service import run_buzz_check
 from services.db import init_db
+from services.image_service import run_image_sync
 from services.snapshot_service import take_snapshot
 
 
@@ -36,7 +37,11 @@ def main() -> int:
             result = run_buzz_check(source="cli")
             print(json.dumps(result, indent=2))
             return 0 if result["ok"] else 1
-        print("Usage: python cli.py {snapshot|compare-latest|list-snapshots|buzz-check}")
+        if command == "image-sync":
+            result = run_image_sync(source="cli")
+            print(json.dumps(result, indent=2))
+            return 0 if result["ok"] else 1
+        print("Usage: python cli.py {snapshot|compare-latest|list-snapshots|buzz-check|image-sync}")
         return 1
     except ValueError as exc:
         print(f"Error: {exc}")

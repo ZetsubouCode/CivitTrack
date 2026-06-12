@@ -1,7 +1,7 @@
 from copy import deepcopy
 import hashlib
 import json
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from .alert_service import insert_alert
 from .buzz_client import BuzzClient, BuzzClientError
@@ -96,6 +96,118 @@ def _http_url(value) -> str | None:
     if not text:
         return None
     return text if urlparse(text).scheme in {"http", "https"} else None
+
+
+def _entity_type_key(value) -> str:
+    return _normalize_key(value or "")
+
+
+def _raw_payload(row: dict) -> dict:
+    raw = row.get("raw_json")
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _entity_id(row: dict, *entity_names: str) -> int | None:
+    entity_key = _entity_type_key(row.get("entity_type"))
+    if entity_key not in {_normalize_key(name) for name in entity_names}:
+        return None
+    return _safe_optional_int(row.get("entity_id"))
+
+
+def _append_query(url: str, **params) -> str:
+    values = {key: value for key, value in params.items() if value is not None}
+    if not values:
+        return url
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}{urlencode(values)}"
+
+
+def _direct_remote_url(raw: dict) -> str | None:
+    return _http_url(_deep_find(
+        raw, "href", "link", "permalink", "pageUrl", "articleUrl", "commentUrl"
+    ))
+
+
+def _comment_source_url(row: dict, config, raw: dict) -> str | None:
+    comment_id = _entity_id(row, "CommentV2", "Comment") or _safe_optional_int(row.get("entity_id"))
+    if not comment_id:
+        return None
+    direct_url = _direct_remote_url(raw)
+    if direct_url:
+        return direct_url
+    article_id = _safe_optional_int(_deep_find(raw, "articleId"))
+    if article_id:
+        return _append_query(config.article_page_url(article_id), highlight=comment_id)
+    image_id = _safe_optional_int(_deep_find(raw, "imageId"))
+    if image_id:
+        return _append_query(config.image_page_url(image_id), highlight=comment_id)
+    model_id = _safe_optional_int(_deep_find(raw, "modelId"))
+    review_id = _safe_optional_int(_deep_find(raw, "reviewId"))
+    if model_id and review_id:
+        return _append_query(
+            config.model_page_url(model_id),
+            dialog="reviewThread",
+            reviewId=review_id,
+            highlight=comment_id,
+        )
+    if model_id:
+        root_comment_id = _safe_optional_int(_deep_find(raw, "rootCommentId", "parentId")) or comment_id
+        return _append_query(
+            config.model_page_url(model_id),
+            dialog="commentThread",
+            commentId=root_comment_id,
+            highlight=comment_id,
+        )
+    return None
+
+
+def _display_event_category(row: dict) -> str:
+    entity_key = _entity_type_key(row.get("entity_type"))
+    text = f"{row.get('transaction_type') or ''} {row.get('description') or ''}".casefold()
+    if any(word in text for word in ("reaction", "reacted", "like", "liked")):
+        if entity_key == "article":
+            return "article_reaction"
+        if entity_key in {"comment", "commentv2"}:
+            return "comment_reaction"
+    return row.get("event_category") or "unknown"
+
+
+def _enrich_transaction_display(row: dict, config=None) -> dict:
+    config = config or get_config()
+    raw = _raw_payload(row)
+    row["event_category"] = _display_event_category(row)
+    row["image_page_url"] = config.image_page_url(row["image_id"]) if row.get("image_id") else None
+    article_id = _entity_id(row, "Article")
+    comment_id = _entity_id(row, "CommentV2", "Comment")
+    row["article_id"] = article_id
+    row["article_url"] = config.article_page_url(article_id) if article_id else None
+    row["comment_id"] = comment_id
+    row["comment_url"] = _comment_source_url(row, config, raw) if comment_id else None
+    row["source_label"] = (
+        row.get("model_name")
+        or (f"Image #{row['image_id']}" if row.get("image_id") else None)
+        or (f"Article #{article_id}" if article_id else None)
+        or (f"Comment #{comment_id}" if comment_id else None)
+        or row.get("username")
+        or "Unknown source"
+    )
+    row["source_url"] = (
+        row.get("model_url")
+        or row.get("image_page_url")
+        or row.get("image_url")
+        or row.get("article_url")
+        or row.get("comment_url")
+        or _direct_remote_url(raw)
+    )
+    return row
 
 
 def get_buzz_settings(connection=None) -> dict:
@@ -220,6 +332,8 @@ def _event_category(transaction_type: str, description: str, entity_type: str, a
     entity = entity_type.casefold()
     is_model = "model" in entity or "model" in text
     is_image = "image" in entity or "image" in text
+    is_article = "article" in entity
+    is_comment = "comment" in entity
     if any(word in text for word in ("collection", "collected", "collect")):
         if is_model:
             return "model_collection"
@@ -230,6 +344,10 @@ def _event_category(transaction_type: str, description: str, entity_type: str, a
             return "model_reaction"
         if is_image:
             return "image_reaction"
+        if is_article:
+            return "article_reaction"
+        if is_comment:
+            return "comment_reaction"
     if "tip" in text:
         if any(word in text for word in ("sent", "send", "given", "outgoing")) or amount < 0:
             return "tip_sent"
@@ -630,7 +748,7 @@ def list_buzz_transactions(filters=None) -> list[dict]:
         ))
     config = get_config()
     for row in rows:
-        row["image_page_url"] = config.image_page_url(row["image_id"]) if row["image_id"] else None
+        _enrich_transaction_display(row, config)
     return rows
 
 
@@ -644,6 +762,7 @@ def get_buzz_transaction_detail(transaction_id: int) -> dict:
         detail = dict(row)
         detail["raw_json"] = json.loads(detail["raw_json"] or "{}")
         detail["related_model"] = _latest_model(connection, detail["model_id"])
+        _enrich_transaction_display(detail)
     if detail["image_id"] and not detail["image_url"]:
         preview = _resolve_image_preview(BuzzClient(get_config()), detail["image_id"])
         if preview:
@@ -654,7 +773,5 @@ def get_buzz_transaction_detail(transaction_id: int) -> dict:
                     "UPDATE buzz_transaction SET image_url = ?, post_id = ? WHERE id = ?",
                     (detail["image_url"], detail["post_id"], transaction_id),
                 )
-    detail["image_page_url"] = (
-        get_config().image_page_url(detail["image_id"]) if detail["image_id"] else None
-    )
+    _enrich_transaction_display(detail)
     return detail

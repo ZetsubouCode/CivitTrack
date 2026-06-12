@@ -22,6 +22,7 @@ ENV_FIELDS = (
     {"name": "CIVITAI_INCLUDE_NSFW", "default": "true"},
     {"name": "CIVITAI_INCLUDE_MINOR", "default": "true"},
     {"name": "CIVITAI_MAX_PAGES", "default": "100"},
+    {"name": "REACTION_DAILY_BONUS_WARNING_LIMIT", "default": "20"},
     {"name": "APP_HOST", "default": "127.0.0.1", "restart_required": True},
     {"name": "APP_PORT", "default": "8787", "restart_required": True},
     {"name": "SECRET_KEY", "default": "dev-only-change-me", "secret": True},
@@ -37,6 +38,10 @@ def build_model_page_url(base_url: str, model_id: int) -> str:
 
 def build_image_page_url(base_url: str, image_id: int) -> str:
     return f"{base_url.rstrip('/')}/images/{image_id}"
+
+
+def build_article_page_url(base_url: str, article_id: int) -> str:
+    return f"{base_url.rstrip('/')}/articles/{article_id}"
 
 
 def _int_env(name: str, default: int) -> int:
@@ -85,6 +90,8 @@ def _normalize_setting(name: str, value) -> str:
         return normalized
     if name == "CIVITAI_MAX_PAGES":
         return str(_positive_int(name, value))
+    if name == "REACTION_DAILY_BONUS_WARNING_LIMIT":
+        return str(_nonnegative_int(name, value))
     if name == "APP_HOST":
         if not value:
             raise ValueError("APP_HOST cannot be empty.")
@@ -104,6 +111,16 @@ def _positive_int(name: str, value: str) -> int:
         raise ValueError(f"{name} must be an integer.") from exc
     if parsed < 1:
         raise ValueError(f"{name} must be at least 1.")
+    return parsed
+
+
+def _nonnegative_int(name: str, value: str) -> int:
+    try:
+        parsed = int(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer.") from exc
+    if parsed < 0:
+        raise ValueError(f"{name} must be at least 0.")
     return parsed
 
 
@@ -189,6 +206,7 @@ class Config:
     include_nsfw: bool
     include_minor: bool
     max_pages: int
+    reaction_daily_bonus_warning_limit: int
     app_host: str
     app_port: int
     secret_key: str
@@ -206,6 +224,9 @@ class Config:
 
     def image_page_url(self, image_id: int) -> str:
         return build_image_page_url(self.base_url, image_id)
+
+    def article_page_url(self, article_id: int) -> str:
+        return build_article_page_url(self.base_url, article_id)
 
 
 def get_config() -> Config:
@@ -228,6 +249,9 @@ def get_config() -> Config:
         include_nsfw=_bool_env("CIVITAI_INCLUDE_NSFW", True),
         include_minor=_bool_env("CIVITAI_INCLUDE_MINOR", True),
         max_pages=max(1, _int_env("CIVITAI_MAX_PAGES", 100)),
+        reaction_daily_bonus_warning_limit=max(
+            0, _int_env("REACTION_DAILY_BONUS_WARNING_LIMIT", 20)
+        ),
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
         app_port=_int_env("APP_PORT", 8787),
         secret_key=os.getenv("SECRET_KEY", "dev-only-change-me"),

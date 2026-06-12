@@ -17,7 +17,8 @@ def get_snapshot_quality(snapshot_id: int, username: str | None = None) -> dict:
         quality = connection.execute(
             "SELECT quality_status, rest_model_count, api_page_count, minor_discovery_enabled, "
             "minor_discovery_status, minor_model_count, collection_metric_status, "
-            "collection_metric_count, creator_profile_status, follower_count_available, "
+            "collection_metric_count, generation_metric_status, generation_metric_count, "
+            "creator_profile_status, follower_count_available, "
             "warning_count, warnings_json, info_json FROM snapshot_quality WHERE snapshot_id = ?",
             (snapshot_id,),
         ).fetchone()

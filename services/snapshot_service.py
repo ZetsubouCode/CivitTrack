@@ -36,6 +36,10 @@ def safe_optional_int(value) -> int | None:
         return None
 
 
+def safe_optional_bool_int(value) -> int | None:
+    return int(value) if isinstance(value, bool) else None
+
+
 def clean_note(value) -> str | None:
     note = str(value or "").strip()
     if len(note) > 500:
@@ -141,6 +145,7 @@ def _normalize_model(item: dict, snapshot_id: int, base_url: str) -> tuple[dict,
         "collected_count": safe_optional_int(
             _first_stat(stats, "collectedCount", "collected_count", default=None)
         ),
+        "generation_count": safe_optional_int(item.get("_generation_count")),
         "comment_count": safe_int(_first_stat(stats, "commentCount", "comment_count")),
         "raw_json": _trim_model_json(item),
     }
@@ -162,6 +167,8 @@ def _normalize_model(item: dict, snapshot_id: int, base_url: str) -> tuple[dict,
                 "download_count": safe_int(
                     _first_stat(version_stats, "downloadCount", "download_count")
                 ),
+                "generation_count": safe_optional_int(version.get("_generation_count")),
+                "generation_covered": safe_optional_bool_int(version.get("_generation_covered")),
                 "raw_json": _trim_version_json(version),
             }
         )
@@ -181,6 +188,7 @@ def _quality_status(models: list[dict], metadata: dict, warnings: list[str]) -> 
         return "warning"
     extra_statuses = {
         metadata.get("collection_metric_status"),
+        metadata.get("generation_metric_status"),
         metadata.get("creator_profile_status"),
     }
     if metadata.get("minor_discovery_enabled"):
@@ -211,6 +219,8 @@ def _insert_snapshot_quality(
             "minor_model_count": safe_int(metadata.get("minor_model_count")),
             "collection_metric_status": metadata.get("collection_metric_status"),
             "collection_metric_count": safe_int(metadata.get("collection_metric_count")),
+            "generation_metric_status": metadata.get("generation_metric_status"),
+            "generation_metric_count": safe_int(metadata.get("generation_metric_count")),
             "creator_profile_status": metadata.get("creator_profile_status"),
             "follower_count_available": int(bool(metadata.get("follower_count_available"))),
             "warning_count": len(warnings),
@@ -239,6 +249,7 @@ def _record_failed_snapshot(error: str, source: str) -> None:
                 "minor_discovery_enabled": config.include_minor,
                 "minor_discovery_status": "failed",
                 "collection_metric_status": "failed",
+                "generation_metric_status": "failed",
                 "creator_profile_status": "failed",
             },
             [error],
@@ -334,6 +345,11 @@ def take_snapshot(
             "total_collected_count": (
                 sum(row["collected_count"] for row in normalized_models)
                 if all(row["collected_count"] is not None for row in normalized_models)
+                else None
+            ),
+            "total_generation_count": (
+                sum(row["generation_count"] for row in normalized_models)
+                if all(row["generation_count"] is not None for row in normalized_models)
                 else None
             ),
             "total_comment_count": sum(row["comment_count"] for row in normalized_models),

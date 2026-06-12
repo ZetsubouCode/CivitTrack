@@ -1,9 +1,10 @@
-from io import BytesIO
 import sqlite3
+from io import BytesIO
 
 from flask import Flask, jsonify, render_template, request, Response, send_file
 
 from services.alert_service import list_alerts, mark_alert_read, mark_all_alerts_read
+from services.article_service import latest_article_summary, list_articles, run_article_sync
 from services.backup_service import create_download_backup, MAX_RESTORE_BYTES, restore_database
 from services.buzz_service import (
     get_buzz_settings,
@@ -22,15 +23,35 @@ from services.compare_service import (
     get_model_history,
     list_snapshots,
 )
+from services.civitai_client import CivitaiError
 from services.config import get_config, list_env_settings, update_env_settings
 from services.db import init_db, list_sync_logs
 from services.export_service import comparison_csv
+from services.image_cache_service import (
+    ImageCacheError,
+    clear_image_cache,
+    get_cached_image,
+    image_cache_status,
+)
+from services.image_service import (
+    get_model_image_detail,
+    get_reaction_usage,
+    latest_image_summary,
+    list_image_models,
+    list_model_images,
+    post_comment_reply,
+    post_image_comment,
+    run_image_sync,
+    sync_hidden_images,
+    toggle_comment_reaction,
+    toggle_image_reaction,
+)
 from services.quality_service import get_snapshot_quality
 from services.settings_service import get_alert_settings, update_alert_settings
 from services.snapshot_service import delete_snapshot, take_snapshot
 
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 app = Flask(__name__)
 app.config["SECRET_KEY"] = get_config().secret_key
 app.config["MAX_CONTENT_LENGTH"] = MAX_RESTORE_BYTES
@@ -273,6 +294,139 @@ def buzz_settings_update():
         return jsonify({"ok": True, "settings": update_buzz_settings(payload)})
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/api/images/status")
+def images_status():
+    hidden_sync = {"ok": False, "error": ""}
+    try:
+        hidden_sync = sync_hidden_images(source="status")
+    except (CivitaiError, ValueError) as exc:
+        hidden_sync = {"ok": False, "error": str(exc)}
+    return jsonify({**latest_image_summary(), "cache": image_cache_status(), "hidden_sync": hidden_sync})
+
+
+@app.post("/api/images/sync")
+def images_sync():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Image sync request must be a JSON object."}), 400
+    result = run_image_sync(
+        pages_per_version=payload.get("pages_per_version", 1),
+        with_meta=bool(payload.get("with_meta", False)),
+        model_id=payload.get("model_id"),
+        model_version_id=payload.get("model_version_id"),
+        max_versions=payload.get("max_versions", 12),
+    )
+    return jsonify(result), 200 if result["ok"] else 400
+
+
+@app.get("/api/images")
+def images_list():
+    return jsonify(list_model_images(request.args))
+
+
+@app.get("/api/images/filters")
+def images_filters():
+    return jsonify(list_image_models(request.args))
+
+
+@app.get("/api/images/detail")
+def images_detail():
+    return _json_action(lambda: get_model_image_detail(_int_arg("image_id")))
+
+
+@app.post("/api/images/reaction")
+def images_reaction():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Reaction request must be a JSON object."}), 400
+    try:
+        return jsonify(toggle_image_reaction(payload.get("image_id"), payload.get("reaction")))
+    except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/api/images/reaction-usage")
+def images_reaction_usage():
+    return jsonify(get_reaction_usage())
+
+
+@app.post("/api/images/comment")
+def images_comment():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Comment request must be a JSON object."}), 400
+    try:
+        return jsonify(post_image_comment(payload.get("image_id"), payload.get("content", "")))
+    except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/images/comment-reply")
+def images_comment_reply():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Reply request must be a JSON object."}), 400
+    try:
+        return jsonify(post_comment_reply(
+            payload.get("image_id"),
+            payload.get("comment_id"),
+            payload.get("parent_thread_id"),
+            payload.get("content", ""),
+        ))
+    except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/images/comment-reaction")
+def images_comment_reaction():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Comment reaction request must be a JSON object."}), 400
+    try:
+        return jsonify(toggle_comment_reaction(
+            payload.get("image_id"),
+            payload.get("comment_id"),
+            payload.get("reaction"),
+        ))
+    except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.delete("/api/images/cache")
+def images_cache_clear():
+    return jsonify(clear_image_cache())
+
+
+@app.get("/api/images/cache/<int:image_id>")
+def images_cache(image_id: int):
+    try:
+        cached = get_cached_image(image_id)
+    except ImageCacheError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    return send_file(
+        cached.path,
+        mimetype=cached.mimetype,
+        conditional=True,
+        max_age=7 * 24 * 60 * 60,
+    )
+
+
+@app.get("/api/articles/status")
+def articles_status():
+    return jsonify(latest_article_summary())
+
+
+@app.post("/api/articles/sync")
+def articles_sync():
+    result = run_article_sync()
+    return jsonify(result), 200 if result["ok"] else 400
+
+
+@app.get("/api/articles")
+def articles_list():
+    return jsonify(list_articles(request.args))
 
 
 if __name__ == "__main__":

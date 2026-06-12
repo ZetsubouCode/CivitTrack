@@ -4,7 +4,7 @@ Standalone local Flask dashboard for tracking CivitAI creator model statistics o
 
 CivitTrack saves API snapshots to SQLite, compares them over time, and answers the practical question: which model or version gained downloads, reactions, collection adds, and comments since the last check? The tracked analytics set stays focused on downloads, reactions, collections, comments, followers when available, model counts, and version downloads.
 
-It does not download models or preview images, scrape HTML, or expose the API key to the browser.
+It does not download models, scrape HTML, or expose the API key to the browser. The Images gallery can cache bounded public thumbnails locally for smoother repeat browsing.
 
 ## Easy Install
 
@@ -96,7 +96,7 @@ Open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
 ## Dashboard Menu Guide
 
-Use the floating navigation tabs on the left side of the dashboard to switch between six focused sections. Dashboard dates use `DD/MM/YYYY`; snapshot and log timestamps keep the local `HH:mm` time after the date. The screenshots below contain example local data for illustration.
+Use the floating navigation tabs on the left side of the dashboard to switch between focused sections. Dashboard dates use `DD/MM/YYYY`; snapshot and log timestamps keep the local `HH:mm` time after the date. The screenshots below contain example local data for illustration.
 
 ### Overview
 
@@ -119,6 +119,16 @@ After a comparison, **Top Movers** highlights the strongest download, collection
 Click a model row to open its **Stored Timeline**. The drawer shows its remote CivitAI cover image when available, a link to its CivitAI page, and the locally stored statistics for each snapshot. CivitTrack does not download the cover image into local storage.
 
 ![Stored timeline drawer for a model](docs/images/models-stored-timeline.png)
+
+### Images
+
+**Images** tracks public CivitAI images and posts linked to your stored LoRA model versions. Click **Sync Images** after taking a model snapshot to index public images from CivitAI into local SQLite storage. The default sync scans the latest stored versions first, and model/version filters can be used before syncing to target a smaller set.
+
+The gallery supports model, version, creator ownership, rating, search, and sort controls. **Hide my images** is enabled by default so the view focuses on images posted by other CivitAI users. The model selector also has a local search field for narrowing long model lists. Rating filters map CivitAI's stored levels into PG, PG-13, R, X, and XXX where possible. Image scrolling uses a virtual grid, so only visible cards are rendered while browsing large local result sets. Click an image card to inspect its stored IDs, source model/version, creator, reactions, comments, dimensions, and CivitAI links.
+
+Images hidden from your CivitAI account and images from blocked CivitAI users are filtered out of the gallery. CivitTrack refreshes those preference lists through the local server and stores only hidden image IDs plus blocked user IDs/usernames locally. From the image detail popup, reaction buttons send a CivitAI `reaction.toggle` request for the selected public image through the local Flask server. The same popup shows recent CivitAI comments, can send a new image comment, can reply to an existing comment, and can react to comments using CivitAI's comment reaction set: Like, Dislike, Laugh, Cry, and Heart. Your API key is not exposed to the browser, but the key must have CivitAI SocialWrite access for reactions and comments. CivitTrack stores reaction state locally after successful CivitAI responses so the gallery can show which image and comment reactions you made from this app.
+
+Gallery thumbnails are cached on demand under `storage/image-cache/`. The cache stores reduced public thumbnails, not model files or full gallery originals, and automatically evicts older files after the local size cap is reached. Settings includes a cache clear action with a warning; clearing the cache only removes local thumbnail files and they are downloaded again while browsing.
 
 ### Buzz
 
@@ -161,6 +171,7 @@ python cli.py snapshot
 python cli.py compare-latest
 python cli.py list-snapshots
 python cli.py buzz-check
+python cli.py image-sync
 ```
 
 Commands return exit code `0` on success and `1` on failure.
@@ -221,4 +232,4 @@ The SQLite database is created automatically under `storage/`.
 
 CivitTrack also reads each model's collection count from CivitAI's JSON site API because the public REST listing does not currently include that metric. Snapshots created before collection tracking was added show that value as unavailable.
 
-CivitTrack fetches statistics and metadata only. It does not download showcase images or model files.
+CivitTrack does not download model files. It fetches statistics and metadata, and the Images gallery may cache reduced public thumbnails locally for smoother browsing.

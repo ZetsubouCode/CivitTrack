@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS account_snapshot (
     total_download_count INTEGER DEFAULT 0,
     total_reaction_count INTEGER DEFAULT 0,
     total_collected_count INTEGER NULL,
+    total_generation_count INTEGER NULL,
     total_comment_count INTEGER DEFAULT 0,
     FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
 );
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS model_snapshot (
     download_count INTEGER DEFAULT 0,
     reaction_count INTEGER DEFAULT 0,
     collected_count INTEGER NULL,
+    generation_count INTEGER NULL,
     comment_count INTEGER DEFAULT 0,
     raw_json TEXT,
     FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
@@ -70,6 +72,8 @@ CREATE TABLE IF NOT EXISTS model_version_snapshot (
     base_model TEXT,
     published_at TEXT,
     download_count INTEGER DEFAULT 0,
+    generation_count INTEGER NULL,
+    generation_covered INTEGER NULL,
     raw_json TEXT,
     FOREIGN KEY(snapshot_id) REFERENCES snapshot(id)
 );
@@ -108,6 +112,8 @@ CREATE TABLE IF NOT EXISTS snapshot_quality (
     minor_model_count INTEGER DEFAULT 0,
     collection_metric_status TEXT,
     collection_metric_count INTEGER DEFAULT 0,
+    generation_metric_status TEXT,
+    generation_metric_count INTEGER DEFAULT 0,
     creator_profile_status TEXT,
     follower_count_available INTEGER DEFAULT 0,
     warning_count INTEGER DEFAULT 0,
@@ -169,6 +175,158 @@ CREATE TABLE IF NOT EXISTS buzz_transaction (
     UNIQUE(transaction_key, account_type),
     FOREIGN KEY(latest_check_id) REFERENCES buzz_check(id)
 );
+CREATE TABLE IF NOT EXISTS image_sync (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    checked_at TEXT NOT NULL,
+    username TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    api_ok INTEGER NOT NULL DEFAULT 1,
+    error TEXT,
+    version_count INTEGER DEFAULT 0,
+    image_count INTEGER DEFAULT 0,
+    new_image_count INTEGER DEFAULT 0,
+    warning_count INTEGER DEFAULT 0,
+    warnings_json TEXT,
+    info_json TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_image (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_id INTEGER NOT NULL UNIQUE,
+    post_id INTEGER NULL,
+    model_id INTEGER NOT NULL,
+    model_name TEXT NOT NULL,
+    model_version_id INTEGER NOT NULL,
+    version_name TEXT,
+    base_model TEXT,
+    image_url TEXT,
+    image_page_url TEXT,
+    creator_user_id INTEGER NULL,
+    width INTEGER NULL,
+    height INTEGER NULL,
+    nsfw_level TEXT,
+    nsfw INTEGER DEFAULT 0,
+    image_type TEXT,
+    published_at TEXT,
+    username TEXT,
+    cry_count INTEGER DEFAULT 0,
+    laugh_count INTEGER DEFAULT 0,
+    like_count INTEGER DEFAULT 0,
+    dislike_count INTEGER DEFAULT 0,
+    heart_count INTEGER DEFAULT 0,
+    comment_count INTEGER DEFAULT 0,
+    stats_refreshed_at TEXT,
+    reaction_refreshed_at TEXT,
+    model_version_ids_json TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    latest_sync_id INTEGER,
+    raw_json TEXT,
+    FOREIGN KEY(latest_sync_id) REFERENCES image_sync(id)
+);
+CREATE TABLE IF NOT EXISTS article_sync (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    checked_at TEXT NOT NULL,
+    username TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    api_ok INTEGER NOT NULL DEFAULT 1,
+    error TEXT,
+    article_count INTEGER DEFAULT 0,
+    new_article_count INTEGER DEFAULT 0,
+    warning_count INTEGER DEFAULT 0,
+    warnings_json TEXT,
+    info_json TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_article (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_id INTEGER NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    username TEXT,
+    user_id INTEGER NULL,
+    cover_image_url TEXT,
+    article_url TEXT,
+    nsfw_level INTEGER NULL,
+    rating_label TEXT,
+    status TEXT,
+    availability TEXT,
+    published_at TEXT,
+    created_at_remote TEXT,
+    updated_at TEXT,
+    tag_names_json TEXT,
+    view_count INTEGER DEFAULT 0,
+    collected_count INTEGER DEFAULT 0,
+    favorite_count INTEGER DEFAULT 0,
+    comment_count INTEGER DEFAULT 0,
+    like_count INTEGER DEFAULT 0,
+    dislike_count INTEGER DEFAULT 0,
+    heart_count INTEGER DEFAULT 0,
+    laugh_count INTEGER DEFAULT 0,
+    cry_count INTEGER DEFAULT 0,
+    reaction_count INTEGER DEFAULT 0,
+    tipped_amount_count INTEGER DEFAULT 0,
+    stats_refreshed_at TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    latest_sync_id INTEGER,
+    raw_json TEXT,
+    FOREIGN KEY(latest_sync_id) REFERENCES article_sync(id)
+);
+CREATE TABLE IF NOT EXISTS article_metric_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_sync_id INTEGER NOT NULL,
+    article_id INTEGER NOT NULL,
+    checked_at TEXT NOT NULL,
+    view_count INTEGER DEFAULT 0,
+    collected_count INTEGER DEFAULT 0,
+    favorite_count INTEGER DEFAULT 0,
+    comment_count INTEGER DEFAULT 0,
+    like_count INTEGER DEFAULT 0,
+    dislike_count INTEGER DEFAULT 0,
+    heart_count INTEGER DEFAULT 0,
+    laugh_count INTEGER DEFAULT 0,
+    cry_count INTEGER DEFAULT 0,
+    reaction_count INTEGER DEFAULT 0,
+    tipped_amount_count INTEGER DEFAULT 0,
+    FOREIGN KEY(article_sync_id) REFERENCES article_sync(id)
+);
+CREATE TABLE IF NOT EXISTS image_reaction_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_id INTEGER NOT NULL,
+    reaction TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    UNIQUE(image_id, reaction)
+);
+CREATE TABLE IF NOT EXISTS comment_reaction_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    comment_id INTEGER NOT NULL,
+    reaction TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    UNIQUE(comment_id, reaction)
+);
+CREATE TABLE IF NOT EXISTS reaction_action_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    reaction TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS hidden_image_preference (
+    image_id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'civitai',
+    hidden_at TEXT NOT NULL,
+    raw_json TEXT
+);
+CREATE TABLE IF NOT EXISTS blocked_user_preference (
+    user_id INTEGER NULL,
+    username TEXT NULL,
+    source TEXT NOT NULL DEFAULT 'civitai',
+    blocked_at TEXT NOT NULL,
+    raw_json TEXT,
+    UNIQUE(user_id, username)
+);
 CREATE INDEX IF NOT EXISTS idx_snapshot_checked_at ON snapshot(checked_at);
 CREATE INDEX IF NOT EXISTS idx_model_snapshot_lookup
     ON model_snapshot(snapshot_id, model_id);
@@ -192,6 +350,34 @@ CREATE INDEX IF NOT EXISTS idx_buzz_transaction_image
     ON buzz_transaction(image_id);
 CREATE INDEX IF NOT EXISTS idx_buzz_transaction_latest_check
     ON buzz_transaction(latest_check_id);
+CREATE INDEX IF NOT EXISTS idx_image_sync_checked_at ON image_sync(checked_at);
+CREATE INDEX IF NOT EXISTS idx_model_image_published
+    ON model_image(published_at);
+CREATE INDEX IF NOT EXISTS idx_model_image_model
+    ON model_image(model_id);
+CREATE INDEX IF NOT EXISTS idx_model_image_version
+    ON model_image(model_version_id);
+CREATE INDEX IF NOT EXISTS idx_model_image_username
+    ON model_image(username);
+CREATE INDEX IF NOT EXISTS idx_article_sync_checked_at ON article_sync(checked_at);
+CREATE INDEX IF NOT EXISTS idx_model_article_published
+    ON model_article(published_at);
+CREATE INDEX IF NOT EXISTS idx_model_article_rating
+    ON model_article(rating_label);
+CREATE INDEX IF NOT EXISTS idx_article_metric_snapshot_article
+    ON article_metric_snapshot(article_id, checked_at);
+CREATE INDEX IF NOT EXISTS idx_image_reaction_state_image
+    ON image_reaction_state(image_id);
+CREATE INDEX IF NOT EXISTS idx_comment_reaction_state_comment
+    ON comment_reaction_state(comment_id);
+CREATE INDEX IF NOT EXISTS idx_reaction_action_log_created
+    ON reaction_action_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_hidden_image_preference_hidden_at
+    ON hidden_image_preference(hidden_at);
+CREATE INDEX IF NOT EXISTS idx_blocked_user_preference_user_id
+    ON blocked_user_preference(user_id);
+CREATE INDEX IF NOT EXISTS idx_blocked_user_preference_username
+    ON blocked_user_preference(username);
 """
 
 
@@ -218,12 +404,40 @@ def init_db() -> None:
             connection.execute("ALTER TABLE model_snapshot ADD COLUMN cover_image_url TEXT")
         if "collected_count" not in model_columns:
             connection.execute("ALTER TABLE model_snapshot ADD COLUMN collected_count INTEGER NULL")
+        if "generation_count" not in model_columns:
+            connection.execute("ALTER TABLE model_snapshot ADD COLUMN generation_count INTEGER NULL")
         account_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(account_snapshot)")
         }
         if "total_collected_count" not in account_columns:
             connection.execute(
                 "ALTER TABLE account_snapshot ADD COLUMN total_collected_count INTEGER NULL"
+            )
+        if "total_generation_count" not in account_columns:
+            connection.execute(
+                "ALTER TABLE account_snapshot ADD COLUMN total_generation_count INTEGER NULL"
+            )
+        version_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(model_version_snapshot)")
+        }
+        if "generation_count" not in version_columns:
+            connection.execute(
+                "ALTER TABLE model_version_snapshot ADD COLUMN generation_count INTEGER NULL"
+            )
+        if "generation_covered" not in version_columns:
+            connection.execute(
+                "ALTER TABLE model_version_snapshot ADD COLUMN generation_covered INTEGER NULL"
+            )
+        quality_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(snapshot_quality)")
+        }
+        if "generation_metric_status" not in quality_columns:
+            connection.execute(
+                "ALTER TABLE snapshot_quality ADD COLUMN generation_metric_status TEXT"
+            )
+        if "generation_metric_count" not in quality_columns:
+            connection.execute(
+                "ALTER TABLE snapshot_quality ADD COLUMN generation_metric_count INTEGER DEFAULT 0"
             )
         snapshot_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(snapshot)")
@@ -244,6 +458,15 @@ def init_db() -> None:
         ):
             if name not in buzz_check_columns:
                 connection.execute(f"ALTER TABLE buzz_check ADD COLUMN {name} {definition}")
+        model_image_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(model_image)")
+        }
+        if "creator_user_id" not in model_image_columns:
+            connection.execute("ALTER TABLE model_image ADD COLUMN creator_user_id INTEGER NULL")
+        if "stats_refreshed_at" not in model_image_columns:
+            connection.execute("ALTER TABLE model_image ADD COLUMN stats_refreshed_at TEXT")
+        if "reaction_refreshed_at" not in model_image_columns:
+            connection.execute("ALTER TABLE model_image ADD COLUMN reaction_refreshed_at TEXT")
 
 
 def dict_rows(cursor: sqlite3.Cursor) -> list[dict]:

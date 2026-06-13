@@ -327,6 +327,19 @@ CREATE TABLE IF NOT EXISTS blocked_user_preference (
     raw_json TEXT,
     UNIQUE(user_id, username)
 );
+CREATE TABLE IF NOT EXISTS comment_reaction_history (
+    comment_id INTEGER PRIMARY KEY,
+    first_seen_at TEXT NOT NULL,
+    last_checked_at TEXT NOT NULL,
+    author_user_id INTEGER NULL,
+    author_username TEXT,
+    content_preview TEXT,
+    comment_count INTEGER DEFAULT 0,
+    reaction_count INTEGER DEFAULT 0,
+    reaction_user_count INTEGER DEFAULT 0,
+    reaction_totals_json TEXT,
+    warnings_json TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_snapshot_checked_at ON snapshot(checked_at);
 CREATE INDEX IF NOT EXISTS idx_model_snapshot_lookup
     ON model_snapshot(snapshot_id, model_id);
@@ -378,6 +391,8 @@ CREATE INDEX IF NOT EXISTS idx_blocked_user_preference_user_id
     ON blocked_user_preference(user_id);
 CREATE INDEX IF NOT EXISTS idx_blocked_user_preference_username
     ON blocked_user_preference(username);
+CREATE INDEX IF NOT EXISTS idx_comment_reaction_history_checked_at
+    ON comment_reaction_history(last_checked_at);
 """
 
 

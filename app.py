@@ -49,6 +49,14 @@ from services.image_service import (
 from services.quality_service import get_snapshot_quality
 from services.settings_service import get_alert_settings, update_alert_settings
 from services.snapshot_service import delete_snapshot, take_snapshot
+from services.user_service import (
+    analyze_comment_reactions,
+    block_users_by_ids,
+    list_comment_reaction_history,
+    list_my_comment_anchors,
+    resolve_users_by_ids,
+    update_user_relationship,
+)
 
 
 APP_VERSION = "2.5.0"
@@ -293,6 +301,62 @@ def buzz_settings_update():
     try:
         return jsonify({"ok": True, "settings": update_buzz_settings(payload)})
     except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/users/resolve")
+def users_resolve():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "User lookup request must be a JSON object."}), 400
+    try:
+        return jsonify(resolve_users_by_ids(payload.get("ids")))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/users/action")
+def users_action():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "User action request must be a JSON object."}), 400
+    try:
+        return jsonify(update_user_relationship(payload.get("user_id"), payload.get("action")))
+    except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.post("/api/users/comment-reactions")
+def users_comment_reactions():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Comment reaction request must be a JSON object."}), 400
+    try:
+        return jsonify(analyze_comment_reactions(payload.get("comment_id")))
+    except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/api/users/comment-history")
+def users_comment_history():
+    return _json_action(lambda: list_comment_reaction_history(request.args.get("limit", 80)))
+
+
+@app.get("/api/users/my-comments")
+def users_my_comments():
+    include_replies = str(request.args.get("include_replies", "1")).lower() not in {"0", "false", "no"}
+    return _json_action(lambda: list_my_comment_anchors(request.args.get("limit", 100), include_replies))
+
+
+@app.post("/api/users/block-batch")
+def users_block_batch():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Batch block request must be a JSON object."}), 400
+    try:
+        result = block_users_by_ids(payload.get("user_ids"))
+        return jsonify(result), 200 if result["ok"] else 400
+    except (CivitaiError, ValueError) as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 

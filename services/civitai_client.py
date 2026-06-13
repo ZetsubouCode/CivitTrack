@@ -456,6 +456,55 @@ class CivitaiClient:
                 return creator
         return None
 
+    def fetch_creators_by_ids(self, user_ids: list[int]) -> dict[int, dict]:
+        ids = []
+        seen = set()
+        for user_id in user_ids:
+            parsed = self._safe_optional_int(user_id)
+            if parsed is None or parsed <= 0 or parsed in seen:
+                continue
+            ids.append(parsed)
+            seen.add(parsed)
+        results: dict[int, dict] = {}
+        for start in range(0, len(ids), GENERATION_BATCH_SIZE):
+            batch_ids = ids[start:start + GENERATION_BATCH_SIZE]
+            batch = self.get_trpc_batch(
+                "user.getCreator",
+                [{"id": user_id} for user_id in batch_ids],
+            )
+            for user_id, result in zip(batch_ids, batch):
+                if isinstance(result, dict):
+                    result_id = self._safe_optional_int(result.get("id")) or user_id
+                    results[result_id] = result
+            if start + GENERATION_BATCH_SIZE < len(ids):
+                time.sleep(GENERATION_BATCH_DELAY_SECONDS)
+        return results
+
+    def fetch_following_user_ids(self) -> list[int]:
+        payload = self.get_json(f"{self.config.base_url}/api/trpc/user.getFollowingUsers")
+        result = self._trpc_result(payload, "CivitAI rejected the following-users request.")
+        if not isinstance(result, list):
+            raise CivitaiError("CivitAI returned an unexpected following-users response.")
+        return [
+            parsed for parsed in (self._safe_optional_int(item) for item in result)
+            if parsed is not None and parsed > 0
+        ]
+
+    def toggle_follow_user(self, user_id: int) -> dict:
+        result = self.post_trpc("user.toggleFollow", {"targetUserId": int(user_id)})
+        return result if isinstance(result, dict) else {}
+
+    def set_blocked_user(self, user_id: int, blocked: bool) -> dict:
+        result = self.post_trpc(
+            "hiddenPreferences.toggleHidden",
+            {"kind": "blockedUser", "data": [{"id": int(user_id)}], "hidden": bool(blocked)},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def fetch_user_profile(self, username: str) -> dict | None:
+        result = self.get_trpc_batch("userProfile.get", [{"username": username}])[0]
+        return result if isinstance(result, dict) else None
+
     def fetch_creator_articles(self, username: str) -> tuple[list[dict], list[str]]:
         url = f"{self.config.base_url}/api/trpc/article.getInfinite"
         items: list[dict] = []
@@ -583,6 +632,109 @@ class CivitaiClient:
         payload = self.get_json(url)
         result = self._trpc_result(payload, "CivitAI rejected the comments request.")
         return result if isinstance(result, dict) else {"comments": [], "nextCursor": None}
+
+    def fetch_comment_by_id(self, comment_id: int) -> dict | None:
+        result = self.get_trpc_batch("commentv2.getSingle", [{"id": int(comment_id)}])[0]
+        return result if isinstance(result, dict) else None
+
+    def fetch_legacy_comment_by_id(self, comment_id: int) -> dict | None:
+        result = self.get_trpc_batch("comment.getById", [{"id": int(comment_id)}])[0]
+        return result if isinstance(result, dict) else None
+
+    def fetch_comment_reply_count(self, comment_id: int) -> int:
+        result = self.get_trpc_batch(
+            "commentv2.getCount",
+            [{"entityId": int(comment_id), "entityType": "comment"}],
+        )[0]
+        try:
+            return int(result or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def fetch_legacy_comment_reply_count(self, comment_id: int) -> int:
+        result = self.get_trpc_batch("comment.getCommentsCount", [{"id": int(comment_id)}])[0]
+        try:
+            return int(result or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def fetch_comment_replies(
+        self,
+        comment_id: int,
+        limit: int = 100,
+        max_pages: int | None = None,
+    ) -> list[dict]:
+        max_pages = max_pages or self.config.max_pages
+        url = f"{self.config.base_url}/api/trpc/commentv2.getInfinite"
+        cursor = None
+        items: list[dict] = []
+        visited_cursors: set[str] = set()
+        for _ in range(max(1, max_pages)):
+            query = {
+                "entityId": int(comment_id),
+                "entityType": "comment",
+                "limit": min(100, max(1, int(limit))),
+                "sort": "Oldest",
+                "hidden": False,
+            }
+            if cursor is not None:
+                query["cursor"] = cursor
+            payload = self.get_json(
+                f"{url}?{urlencode({'input': json.dumps({'json': query}, separators=(',', ':'))})}"
+            )
+            result = self._trpc_result(payload, "CivitAI rejected the comment replies request.")
+            if not isinstance(result, dict):
+                break
+            page_items = result.get("comments") or []
+            if not isinstance(page_items, list):
+                raise CivitaiError("CivitAI returned an unexpected comment replies response.")
+            items.extend(item for item in page_items if isinstance(item, dict))
+            cursor = result.get("nextCursor")
+            if not cursor or not page_items:
+                break
+            cursor_key = json.dumps(cursor, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            if cursor_key in visited_cursors:
+                raise CivitaiError("CivitAI comment reply pagination repeated unexpectedly.")
+            visited_cursors.add(cursor_key)
+        return items
+
+    def fetch_legacy_comment_replies(self, comment_id: int) -> list[dict]:
+        result = self.get_trpc_batch("comment.getCommentsById", [{"id": int(comment_id)}])[0]
+        if result is None:
+            return []
+        if not isinstance(result, list):
+            raise CivitaiError("CivitAI returned an unexpected legacy comment replies response.")
+        return [item for item in result if isinstance(item, dict)]
+
+    def fetch_legacy_comments_by_user(
+        self,
+        user_id: int,
+        limit: int = 100,
+        max_pages: int | None = None,
+    ) -> list[dict]:
+        max_pages = max_pages or self.config.max_pages
+        cursor = None
+        items: list[dict] = []
+        visited_cursors: set[str] = set()
+        for _ in range(max(1, max_pages)):
+            query = {"userId": int(user_id), "limit": min(200, max(1, int(limit)))}
+            if cursor is not None:
+                query["cursor"] = cursor
+            result = self.get_trpc_batch("comment.getAll", [query])[0]
+            if not isinstance(result, dict):
+                break
+            page_items = result.get("comments") or []
+            if not isinstance(page_items, list):
+                raise CivitaiError("CivitAI returned an unexpected user comment response.")
+            items.extend(item for item in page_items if isinstance(item, dict))
+            cursor = result.get("nextCursor")
+            if not cursor or not page_items:
+                break
+            cursor_key = str(cursor)
+            if cursor_key in visited_cursors:
+                raise CivitaiError("CivitAI user comment pagination repeated unexpectedly.")
+            visited_cursors.add(cursor_key)
+        return items
 
     def fetch_image_comment_count(self, image_id: int) -> int:
         query = {"entityId": int(image_id), "entityType": "image", "hidden": False}

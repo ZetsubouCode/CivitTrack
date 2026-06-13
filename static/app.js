@@ -46,6 +46,10 @@ const state = {
     overscanRows: 3,
     frame: null,
   },
+  userLookupResult: null,
+  commentReactionAnalysis: null,
+  commentReactionHistory: [],
+  myCommentAnchors: [],
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -123,7 +127,7 @@ function compareDates(a, b, direction) {
 }
 
 function setView(view, updateHash = true) {
-  const views = ["overview", "models", "images", "articles", "buzz", "snapshots", "alerts", "settings"];
+  const views = ["overview", "models", "images", "articles", "buzz", "users", "snapshots", "alerts", "settings"];
   const nextView = views.includes(view) ? view : "overview";
   state.currentView = nextView;
   $$("[data-view-panel]").forEach((panel) => panel.classList.toggle("d-none", panel.dataset.viewPanel !== nextView));
@@ -1742,6 +1746,390 @@ async function clearImageCache(event) {
   }
 }
 
+const userLookupStatus = (value) => ({
+  found: ["Found", "ct-quality-good"],
+  local_only: ["Local only", "ct-quality-partial"],
+  deleted: ["Deleted", "ct-quality-warning"],
+  found_without_username: ["No username", "ct-quality-partial"],
+  not_found: ["Not found", "ct-quality-unavailable"],
+}[value] || [value || "Unknown", "ct-quality-unavailable"]);
+
+const userLookupSource = (value) => ({
+  civitai_trpc: "CivitAI tRPC",
+  model_image: "Stored images",
+  model_article: "Stored articles",
+  buzz_transaction: "Buzz activity",
+  blocked_user_preference: "Blocked users",
+  unavailable: "Unavailable",
+}[value] || value || "Unknown");
+
+function renderUserLookupResults(result) {
+  state.userLookupResult = result || null;
+  const rows = result?.users || [];
+  $("#userResultSummary").textContent = rows.length
+    ? `${fmt(result.found_count || 0)} of ${fmt(rows.length)} user ID${rows.length === 1 ? "" : "s"} resolved.`
+    : "No lookup run yet.";
+  $("#userLookupPill").className = `ct-pill ${result?.remote_error ? "ct-pill-warning" : "ct-pill-success"}`;
+  $("#userLookupPill").textContent = result?.remote_error ? "Partial" : "Done";
+  $("#userLookupHelp").textContent = result?.remote_error
+    ? `CivitAI lookup failed: ${result.remote_error}. Local fallback matches are still shown.`
+    : result?.warnings?.length
+    ? result.warnings.join(" ")
+    : "Batch lookup is limited to 100 IDs at a time.";
+  if (!rows.length) {
+    $("#userRows").innerHTML = `<tr><td colspan="6" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr>`;
+    return;
+  }
+  $("#userRows").innerHTML = rows.map((row) => {
+    const [label, badgeClass] = userLookupStatus(row.status);
+    const followLabel = row.following ? "Unfollow" : "Follow";
+    const blockLabel = row.blocked ? "Unblock" : "Block";
+    const relationship = [
+      row.following ? `<span class="ct-quality ct-quality-good">Following</span>` : "",
+      row.blocked ? `<span class="ct-quality ct-quality-failed">Blocked</span>` : "",
+    ].filter(Boolean).join(" ");
+    const profile = row.profile_url
+      ? `<a href="${esc(row.profile_url)}" target="_blank" rel="noreferrer">Open profile</a>`
+      : `<span class="ct-help">${esc(row.error || "Unavailable")}</span>`;
+    return `
+      <tr>
+        <td><strong>${fmt(row.user_id)}</strong></td>
+        <td>${row.username ? esc(row.username) : "<span class=\"ct-help\">Unknown</span>"} ${relationship}</td>
+        <td><span class="ct-quality ${badgeClass}">${esc(label)}</span></td>
+        <td>${esc(userLookupSource(row.source))}</td>
+        <td>${profile}</td>
+        <td>
+          <div class="ct-user-actions">
+            <button class="btn ct-btn-quiet" type="button" data-user-action="follow" data-user-id="${esc(row.user_id)}">
+              <i class="bi ${row.following ? "bi-person-dash" : "bi-person-plus"}"></i> ${followLabel}
+            </button>
+            <button class="btn ${row.blocked ? "ct-btn-secondary" : "ct-btn-danger"}" type="button" data-user-action="${row.blocked ? "unblock" : "block"}" data-user-id="${esc(row.user_id)}">
+              <i class="bi ${row.blocked ? "bi-person-check" : "bi-person-x"}"></i> ${blockLabel}
+            </button>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+}
+
+async function resolveUsers(event) {
+  event.preventDefault();
+  const ids = $("#userIdsInput").value.trim();
+  if (!ids) {
+    toast("Enter at least one CivitAI user ID.", "warning");
+    return;
+  }
+  const button = $("#resolveUsers");
+  busy(button, true, "Resolving...");
+  $("#resolveUsersHero").disabled = true;
+  $("#userLookupPill").className = "ct-pill ct-pill-muted";
+  $("#userLookupPill").textContent = "Checking";
+  try {
+    const result = await api("/api/users/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    renderUserLookupResults(result);
+    toast(`Resolved ${fmt(result.found_count)} of ${fmt(result.count)} user ID${result.count === 1 ? "" : "s"}.`);
+  } catch (error) {
+    $("#userLookupPill").className = "ct-pill ct-pill-warning";
+    $("#userLookupPill").textContent = "Error";
+    toast(error.message, "error");
+  } finally {
+    busy(button, false);
+    $("#resolveUsersHero").disabled = false;
+  }
+}
+
+function clearUserLookup() {
+  $("#userIdsInput").value = "";
+  state.userLookupResult = null;
+  $("#userLookupPill").className = "ct-pill ct-pill-muted";
+  $("#userLookupPill").textContent = "Ready";
+  $("#userLookupHelp").textContent = "Batch lookup is limited to 100 IDs at a time.";
+  $("#userResultSummary").textContent = "No lookup run yet.";
+  $("#userRows").innerHTML = `<tr><td colspan="6" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr>`;
+}
+
+async function runUserAction(event) {
+  const button = event.target.closest("[data-user-action]");
+  if (!button) return;
+  const userId = Number(button.dataset.userId);
+  const action = button.dataset.userAction;
+  const row = state.userLookupResult?.users?.find((item) => Number(item.user_id) === userId);
+  const name = row?.username ? `${row.username} (${userId})` : `user ${userId}`;
+  if (action === "block" && !confirm(`Block ${name}? CivitAI says blocked users will not see your content, and you will not see theirs.`)) {
+    return;
+  }
+  if (action === "unblock" && !confirm(`Unblock ${name}? Their content may show in your feed again.`)) {
+    return;
+  }
+  busy(button, true, action === "follow" ? "Updating..." : action === "block" ? "Blocking..." : "Unblocking...");
+  try {
+    const result = await api("/api/users/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId, action }),
+    });
+    if (state.userLookupResult?.users) {
+      state.userLookupResult.users = state.userLookupResult.users.map((item) => Number(item.user_id) === userId ? result.user : item);
+      state.userLookupResult.found_count = state.userLookupResult.users.filter((item) => item.username).length;
+      renderUserLookupResults(state.userLookupResult);
+    } else {
+      renderUserLookupResults({ ok: true, users: [result.user], count: 1, found_count: result.user?.username ? 1 : 0, warnings: result.warnings || [] });
+    }
+    const verb = action === "follow" ? (result.user.following ? "Followed" : "Unfollowed") : action === "block" ? "Blocked" : "Unblocked";
+    toast(`${verb} ${result.user.username || `user ${userId}`}.`);
+  } catch (error) {
+    toast(error.message, "error");
+    busy(button, false);
+  }
+}
+
+function selectedCommentReactions() {
+  return $$("#commentReactionFilters [data-comment-reaction].active").map((button) => button.dataset.commentReaction);
+}
+
+function commentHistoryLabel(row) {
+  const totals = row.reaction_totals || {};
+  const disliked = totals.Dislike || 0;
+  const preview = row.content_preview ? ` - ${row.content_preview}` : "";
+  return `#${row.comment_id} | ${fmt(disliked)} dislikes | ${row.author_username || "Unknown"}${preview}`;
+}
+
+function renderCommentReactionHistory() {
+  const select = $("#commentHistorySelect");
+  const rows = state.commentReactionHistory || [];
+  if (!rows.length) {
+    select.innerHTML = `<option value="">No saved comments yet</option>`;
+    return;
+  }
+  select.innerHTML = `<option value="">Choose saved comment...</option>` + rows.map((row) => (
+    `<option value="${esc(row.comment_id)}">${esc(commentHistoryLabel(row))}</option>`
+  )).join("");
+}
+
+function myCommentAnchorLabel(row) {
+  const totals = row.reaction_totals || {};
+  const disliked = totals.Dislike || 0;
+  const kind = row.kind === "reply" ? "reply" : "main";
+  const model = row.model_name || (row.model_id ? `Model ${row.model_id}` : "Unknown model");
+  return `#${row.comment_id} | ${kind} | ${fmt(disliked)} dislikes | ${model} - ${row.content_preview || ""}`;
+}
+
+function setCommentAnchorPreview(commentId, sourceText = "") {
+  const preview = $("#commentAnchorPreview");
+  if (!preview) return;
+  if (!commentId) {
+    preview.textContent = "No comment selected.";
+    return;
+  }
+  preview.innerHTML = `<strong>Selected #${esc(commentId)}</strong>${sourceText ? ` <span>${esc(sourceText)}</span>` : ""}`;
+}
+
+function setCommentAnchorFromSelect(select, sourceLabel) {
+  const commentId = select.value;
+  if (!commentId) return;
+  $("#commentIdInput").value = commentId;
+  const label = select.selectedOptions?.[0]?.textContent || "";
+  setCommentAnchorPreview(commentId, `${sourceLabel}: ${label}`);
+}
+
+function renderMyCommentAnchors() {
+  const select = $("#myCommentAnchorSelect");
+  const rows = state.myCommentAnchors || [];
+  if (!rows.length) {
+    select.innerHTML = `<option value="">Load your comments first</option>`;
+    return;
+  }
+  select.innerHTML = `<option value="">Choose one of your comments...</option>` + rows.map((row) => (
+    `<option value="${esc(row.comment_id)}">${esc(myCommentAnchorLabel(row))}</option>`
+  )).join("");
+}
+
+async function loadMyCommentAnchors(event) {
+  const button = event?.currentTarget || $("#loadMyComments");
+  busy(button, true, "Loading...");
+  try {
+    const params = new URLSearchParams({
+      limit: "500",
+      include_replies: $("#includeReplyAnchors").checked ? "1" : "0",
+    });
+    const result = await api(`/api/users/my-comments?${params}`);
+    state.myCommentAnchors = result.comments || [];
+    renderMyCommentAnchors();
+    $("#commentReactionHelp").textContent = `Loaded ${fmt(result.count)} comment anchor${result.count === 1 ? "" : "s"} for ${result.username}. Choose one, then analyze reactions.`;
+    toast(`Loaded ${fmt(result.count)} comment anchor${result.count === 1 ? "" : "s"}.`);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function loadCommentReactionHistory() {
+  try {
+    const result = await api("/api/users/comment-history");
+    state.commentReactionHistory = result.history || [];
+    renderCommentReactionHistory();
+  } catch (error) {
+    $("#commentHistorySelect").innerHTML = `<option value="">History unavailable</option>`;
+  }
+}
+
+function matchingCommentReactionUsers() {
+  const analysis = state.commentReactionAnalysis;
+  if (!analysis?.reaction_users) return [];
+  const selected = new Set(selectedCommentReactions());
+  const excludeAuthors = $("#commentExcludeAuthors").checked;
+  const hideBlocked = $("#commentHideBlocked").checked;
+  return analysis.reaction_users.filter((user) => {
+    if (excludeAuthors && user.is_comment_author) return false;
+    if (hideBlocked && user.blocked) return false;
+    return (user.reaction_types || []).some((reaction) => selected.has(reaction));
+  });
+}
+
+function reactionEventSummary(user) {
+  const selected = new Set(selectedCommentReactions());
+  const events = (user.events || []).filter((event) => selected.has(event.reaction));
+  const byComment = new Map();
+  events.forEach((event) => {
+    const key = event.comment_id;
+    const existing = byComment.get(key) || { comment_id: key, kind: event.comment_kind, reactions: new Set() };
+    existing.reactions.add(event.reaction);
+    byComment.set(key, existing);
+  });
+  return [...byComment.values()].map((item) => {
+    const label = item.kind === "main" ? "main" : "reply";
+    return `${[...item.reactions].join(", ")} on ${label} #${item.comment_id}`;
+  }).join("; ");
+}
+
+function updateCommentSelectionSummary() {
+  const visible = $$("[data-comment-block-user]");
+  const selected = $$("[data-comment-block-user]:checked");
+  const summary = $("#commentSelectedSummary");
+  const hasRows = visible.length > 0;
+  if (summary) {
+    summary.textContent = hasRows
+      ? `${fmt(selected.length)} of ${fmt(visible.length)} matching user${visible.length === 1 ? "" : "s"} selected for blocking.`
+      : "No users selected.";
+  }
+  $("#selectAllReactionUsers").disabled = !hasRows;
+  $("#clearReactionUserSelection").disabled = !hasRows;
+  $("#blockSelectedReactionUsers").disabled = selected.length < 1;
+}
+
+function renderCommentReactionAnalysis() {
+  const analysis = state.commentReactionAnalysis;
+  const matches = matchingCommentReactionUsers();
+  if (!analysis) {
+    $("#commentReactionSummary").textContent = "No comment scanned yet.";
+    $("#commentReactionTotals").innerHTML = "";
+    $("#commentReactionRows").innerHTML = `<tr><td colspan="6" class="ct-table-empty">Enter a main comment ID and analyze reactions.</td></tr>`;
+    updateCommentSelectionSummary();
+    return;
+  }
+  $("#commentReactionSummary").textContent = `${fmt(matches.length)} matching user${matches.length === 1 ? "" : "s"} from ${fmt(analysis.reaction_user_count)} reacting user${analysis.reaction_user_count === 1 ? "" : "s"} across ${fmt(analysis.comment_count)} comment${analysis.comment_count === 1 ? "" : "s"}.`;
+  const totals = analysis.reaction_totals || {};
+  $("#commentReactionTotals").innerHTML = ["Like", "Dislike", "Laugh", "Cry", "Heart"].map((reaction) => `<span>${esc(reaction)} ${fmt(totals[reaction] || 0)}</span>`).join("");
+  if (!matches.length) {
+    $("#commentReactionRows").innerHTML = `<tr><td colspan="6" class="ct-table-empty">No users match the selected reaction filters.</td></tr>`;
+    updateCommentSelectionSummary();
+    return;
+  }
+  $("#commentReactionRows").innerHTML = matches.map((user) => {
+    const profile = user.profile_url
+      ? `<a href="${esc(user.profile_url)}" target="_blank" rel="noreferrer">Open profile</a>`
+      : `<span class="ct-help">Unavailable</span>`;
+    const status = [
+      user.blocked ? `<span class="ct-quality ct-quality-failed">Blocked</span>` : "",
+      user.following ? `<span class="ct-quality ct-quality-good">Following</span>` : "",
+      user.is_comment_author ? `<span class="ct-quality ct-quality-warning">Author</span>` : "",
+    ].filter(Boolean).join(" ") || `<span class="ct-quality ct-quality-unavailable">Not blocked</span>`;
+    return `
+      <tr>
+        <td><strong>${esc(user.username || `User ${user.user_id}`)}</strong><br><span class="ct-help">ID ${fmt(user.user_id)}</span></td>
+        <td>${esc((user.reaction_types || []).join(", "))}<br><span class="ct-help">${fmt(user.reaction_count)} total reaction${user.reaction_count === 1 ? "" : "s"}</span></td>
+        <td>${esc(reactionEventSummary(user))}</td>
+        <td>${status}</td>
+        <td>${profile}</td>
+        <td><label class="ct-check"><input type="checkbox" data-comment-block-user="${esc(user.user_id)}" checked> Block</label></td>
+      </tr>`;
+  }).join("");
+  updateCommentSelectionSummary();
+}
+
+async function analyzeCommentReactions(event) {
+  event.preventDefault();
+  const commentId = $("#commentIdInput").value.trim();
+  if (!commentId) {
+    toast("Enter a main comment ID first.", "warning");
+    return;
+  }
+  const button = $("#analyzeCommentReactions");
+  busy(button, true, "Analyzing...");
+  $("#commentReactionPill").className = "ct-pill ct-pill-muted";
+  $("#commentReactionPill").textContent = "Scanning";
+  try {
+    const result = await api("/api/users/comment-reactions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment_id: Number(commentId) }),
+    });
+    state.commentReactionAnalysis = result;
+    $("#commentReactionPill").className = `ct-pill ${result.warnings?.length ? "ct-pill-warning" : "ct-pill-success"}`;
+    $("#commentReactionPill").textContent = result.warnings?.length ? "Partial" : "Done";
+    $("#commentReactionHelp").textContent = result.warnings?.length ? result.warnings.join(" ") : "Review matching users, then block selected accounts if needed.";
+    renderCommentReactionAnalysis();
+    await loadCommentReactionHistory();
+    $("#commentHistorySelect").value = String(result.comment_id);
+    setCommentAnchorPreview(result.comment_id, "Last scanned comment");
+    toast(`Scanned ${fmt(result.comment_count)} comment${result.comment_count === 1 ? "" : "s"} and ${fmt(result.reaction_count)} reaction${result.reaction_count === 1 ? "" : "s"}.`);
+  } catch (error) {
+    $("#commentReactionPill").className = "ct-pill ct-pill-warning";
+    $("#commentReactionPill").textContent = "Error";
+    toast(error.message, "error");
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function blockSelectedReactionUsers(event) {
+  const ids = $$("[data-comment-block-user]:checked").map((input) => Number(input.dataset.commentBlockUser)).filter(Boolean);
+  if (!ids.length) {
+    toast("Select at least one matching user to block.", "warning");
+    return;
+  }
+  const reactions = selectedCommentReactions().join(", ");
+  if (!confirm(`Block ${ids.length} user${ids.length === 1 ? "" : "s"} who matched: ${reactions}? This changes your CivitAI account block list.`)) {
+    return;
+  }
+  const button = event.currentTarget;
+  busy(button, true, "Blocking...");
+  try {
+    const result = await api("/api/users/block-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_ids: ids }),
+    });
+    const blockedIds = new Set(result.blocked_ids || []);
+    if (state.commentReactionAnalysis?.reaction_users) {
+      state.commentReactionAnalysis.reaction_users = state.commentReactionAnalysis.reaction_users.map((user) => blockedIds.has(Number(user.user_id)) ? { ...user, blocked: true } : user);
+      renderCommentReactionAnalysis();
+    }
+    const failed = result.failed_count || 0;
+    toast(`Blocked ${fmt(result.blocked_count)} user${result.blocked_count === 1 ? "" : "s"}${failed ? `; ${fmt(failed)} failed` : ""}.`, failed ? "warning" : "info");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    busy(button, false);
+    updateCommentSelectionSummary();
+  }
+}
+
 $$(".js-snapshot").forEach((button) => button.addEventListener("click", openSnapshotModal));
 $$(".js-compare-latest").forEach((button) => button.addEventListener("click", (event) => compare("/api/compare-latest", event.currentTarget)));
 $$(".js-compare-range").forEach((button) => button.addEventListener("click", compareRange));
@@ -1764,6 +2152,47 @@ $("#compareDate").addEventListener("click", (event) => {
 $("#modelSearch").addEventListener("input", renderModels);
 $("#breakdownSearch").addEventListener("input", renderBreakdown);
 $("#buzzSearch").addEventListener("input", renderBuzzTransactions);
+$("#userLookupForm").addEventListener("submit", resolveUsers);
+$("#resolveUsersHero").addEventListener("click", () => $("#userLookupForm").requestSubmit());
+$("#clearUserLookup").addEventListener("click", clearUserLookup);
+$("#userRows").addEventListener("click", runUserAction);
+$("#commentReactionForm").addEventListener("submit", analyzeCommentReactions);
+$("#commentHistorySelect").addEventListener("change", (event) => {
+  setCommentAnchorFromSelect(event.target, "Saved scan");
+});
+$("#myCommentAnchorSelect").addEventListener("change", (event) => {
+  setCommentAnchorFromSelect(event.target, "My comment");
+});
+$("#commentIdInput").addEventListener("input", (event) => {
+  const commentId = event.target.value.trim();
+  setCommentAnchorPreview(commentId, commentId ? "Manual entry" : "");
+});
+$("#loadMyComments").addEventListener("click", loadMyCommentAnchors);
+$("#includeReplyAnchors").addEventListener("change", () => {
+  state.myCommentAnchors = [];
+  renderMyCommentAnchors();
+});
+$("#commentReactionFilters").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-comment-reaction]");
+  if (!button) return;
+  button.classList.toggle("active");
+  if (!selectedCommentReactions().length) button.classList.add("active");
+  renderCommentReactionAnalysis();
+});
+$("#commentExcludeAuthors").addEventListener("change", renderCommentReactionAnalysis);
+$("#commentHideBlocked").addEventListener("change", renderCommentReactionAnalysis);
+$("#commentReactionRows").addEventListener("change", (event) => {
+  if (event.target.matches("[data-comment-block-user]")) updateCommentSelectionSummary();
+});
+$("#selectAllReactionUsers").addEventListener("click", () => {
+  $$("[data-comment-block-user]").forEach((input) => { input.checked = true; });
+  updateCommentSelectionSummary();
+});
+$("#clearReactionUserSelection").addEventListener("click", () => {
+  $$("[data-comment-block-user]").forEach((input) => { input.checked = false; });
+  updateCommentSelectionSummary();
+});
+$("#blockSelectedReactionUsers").addEventListener("click", blockSelectedReactionUsers);
 $$(".js-buzz-check").forEach((button) => button.addEventListener("click", runBuzzCheck));
 $$(".js-image-sync").forEach((button) => button.addEventListener("click", runImageSync));
 $$(".js-article-sync").forEach((button) => button.addEventListener("click", runArticleSync));
@@ -1889,9 +2318,10 @@ $$('[data-bs-toggle="tooltip"]').forEach((element) => bootstrap.Tooltip.getOrCre
 function viewFromHash() {
   const hash = location.hash.slice(1);
   if (hash === "snapshot-manager") return "snapshots";
-  return ["overview", "models", "images", "articles", "buzz", "snapshots", "alerts", "settings"].includes(hash) ? hash : "overview";
+  return ["overview", "models", "images", "articles", "buzz", "users", "snapshots", "alerts", "settings"].includes(hash) ? hash : "overview";
 }
 
 window.addEventListener("hashchange", () => setView(viewFromHash(), false));
 setView(viewFromHash(), false);
+loadCommentReactionHistory();
 refresh().catch((error) => toast(error.message, "error"));

@@ -37,6 +37,10 @@
     <i class="bi bi-lightning-charge-fill"></i>
     <span>Buzz</span>
   </button>
+  <button class="ct-side-tab" type="button" data-view="users" aria-controls="usersView" aria-selected="false" title="Users">
+    <i class="bi bi-person-vcard-fill"></i>
+    <span>Users</span>
+  </button>
   <button class="ct-side-tab" type="button" data-view="snapshots" aria-controls="snapshotsView" aria-selected="false" title="Snapshots">
     <i class="bi bi-camera-fill"></i>
     <span>Snapshots</span>
@@ -397,6 +401,151 @@
       <table class="table ct-table mb-0">
         <thead><tr><th>Date</th><th>Buzz</th><th>Account</th><th>Event</th><th>Source</th><th>Description</th><th>Match</th><th>Link</th></tr></thead>
         <tbody id="buzzRows"><tr><td colspan="8" class="ct-table-empty">Enable Buzz tracking and run a check to load activity.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+  </div>
+
+  <div id="usersView" class="ct-view d-none" data-view-panel="users">
+  <section class="ct-hero ct-card">
+    <div>
+      <span class="ct-eyebrow"><i class="bi bi-person-vcard-fill"></i> CivitAI profile lookup</span>
+      <h1>User Resolver</h1>
+      <p>Check one CivitAI user ID or paste a batch of IDs to resolve public usernames through CivitAI's site API, with local stored matches used as a fallback.</p>
+    </div>
+    <div class="ct-hero-actions">
+      <button id="resolveUsersHero" class="btn ct-btn-primary" type="button"><i class="bi bi-search"></i> Resolve Users</button>
+      <small>Accepts comma, space, semicolon, tab, or line-separated IDs.</small>
+    </div>
+  </section>
+
+  <section class="ct-card ct-user-lookup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Single or batch input</span>
+        <h2>User ID Lookup</h2>
+      </div>
+      <span id="userLookupPill" class="ct-pill ct-pill-muted">Ready</span>
+    </div>
+    <form id="userLookupForm">
+      <label class="ct-note-field" for="userIdsInput">CivitAI user ID list</label>
+      <textarea id="userIdsInput" class="form-control ct-user-id-input" rows="5" placeholder="12042163&#10;123456, 789012"></textarea>
+      <div class="ct-settings-actions">
+        <button id="resolveUsers" class="btn ct-btn-primary" type="submit"><i class="bi bi-search"></i> Resolve Users</button>
+        <button id="clearUserLookup" class="btn ct-btn-quiet" type="button"><i class="bi bi-x-circle"></i> Clear</button>
+        <small id="userLookupHelp" class="ct-help">Batch lookup is limited to 100 IDs at a time.</small>
+      </div>
+    </form>
+  </section>
+
+  <section class="ct-card ct-table-card">
+    <div class="ct-section-heading ct-table-heading">
+      <div>
+        <span class="ct-eyebrow">Lookup results</span>
+        <h2>Resolved Users</h2>
+      </div>
+      <small id="userResultSummary" class="ct-help">No lookup run yet.</small>
+    </div>
+    <div class="table-responsive ct-table-wrap">
+      <table class="table ct-table ct-user-table mb-0">
+        <thead><tr><th>User ID</th><th>Username</th><th>Status</th><th>Source</th><th>Profile</th><th>Actions</th></tr></thead>
+        <tbody id="userRows"><tr><td colspan="6" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="ct-card ct-user-lookup ct-comment-audit">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Comment reaction audit</span>
+        <h2>Reaction Users From A Comment Thread</h2>
+      </div>
+      <span id="commentReactionPill" class="ct-pill ct-pill-muted">Ready</span>
+    </div>
+    <form id="commentReactionForm" class="ct-comment-audit-form">
+      <div class="ct-comment-audit-grid">
+        <div class="ct-audit-panel ct-audit-panel-wide">
+          <div class="ct-audit-panel-head">
+            <span class="ct-step">1</span>
+            <div>
+              <strong>Choose Comment</strong>
+              <small>Load your comment anchors, pick a saved scan, or paste an ID.</small>
+            </div>
+          </div>
+          <div class="ct-audit-anchor-grid">
+            <div class="ct-audit-load-row">
+              <button id="loadMyComments" class="btn ct-btn-secondary" type="button"><i class="bi bi-person-lines-fill"></i> Load My Comments</button>
+              <label class="ct-check"><input id="includeReplyAnchors" type="checkbox" checked> Include replies</label>
+            </div>
+            <label class="ct-filter-field ct-filter-field-wide" for="myCommentAnchorSelect">
+              <span><i class="bi bi-person-lines-fill"></i> My comments</span>
+              <select id="myCommentAnchorSelect" class="form-select">
+                <option value="">Load your comments first</option>
+              </select>
+            </label>
+            <label class="ct-filter-field ct-filter-field-wide" for="commentHistorySelect">
+              <span><i class="bi bi-clock-history"></i> Saved scans</span>
+              <select id="commentHistorySelect" class="form-select">
+                <option value="">No saved comments yet</option>
+              </select>
+            </label>
+            <label class="ct-filter-field" for="commentIdInput">
+              <span><i class="bi bi-chat-left-text"></i> Manual comment ID</span>
+              <input id="commentIdInput" class="form-control" type="number" min="1" step="1" placeholder="Example: 1211409">
+            </label>
+          </div>
+          <div id="commentAnchorPreview" class="ct-anchor-preview">No comment selected.</div>
+        </div>
+        <div class="ct-audit-panel">
+          <div class="ct-audit-panel-head">
+            <span class="ct-step">2</span>
+            <div>
+              <strong>Filter &amp; Scan</strong>
+              <small>Pick reaction types before analyzing the thread.</small>
+            </div>
+          </div>
+          <div class="ct-filter-section">
+            <span><i class="bi bi-emoji-frown"></i> Target reactions</span>
+            <div id="commentReactionFilters" class="ct-filter-row ct-chip-row" aria-label="Target comment reactions">
+              <button class="ct-filter" type="button" data-comment-reaction="Like">Like</button>
+              <button class="ct-filter active" type="button" data-comment-reaction="Dislike">Dislike</button>
+              <button class="ct-filter" type="button" data-comment-reaction="Laugh">Laugh</button>
+              <button class="ct-filter" type="button" data-comment-reaction="Cry">Cry</button>
+              <button class="ct-filter" type="button" data-comment-reaction="Heart">Heart</button>
+            </div>
+          </div>
+          <div class="ct-audit-toggles">
+            <label class="ct-toggle-row ct-comment-reaction-toggle"><span>Exclude comment authors</span><input id="commentExcludeAuthors" type="checkbox" checked></label>
+            <label class="ct-toggle-row ct-comment-reaction-toggle"><span>Hide already blocked</span><input id="commentHideBlocked" type="checkbox" checked></label>
+          </div>
+          <div class="ct-audit-scan-actions">
+            <button id="analyzeCommentReactions" class="btn ct-btn-primary" type="submit"><i class="bi bi-search"></i> Analyze Reactions</button>
+            <small id="commentReactionHelp" class="ct-help">Analysis only lists users. Blocking happens from the review table.</small>
+          </div>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <section class="ct-card ct-table-card">
+    <div class="ct-section-heading ct-table-heading">
+      <div>
+        <span class="ct-eyebrow">Reaction matches</span>
+        <h2>Users To Review</h2>
+      </div>
+      <div class="ct-result-actions">
+        <small id="commentReactionSummary" class="ct-help">No comment scanned yet.</small>
+        <button id="selectAllReactionUsers" class="btn ct-btn-quiet" type="button" disabled><i class="bi bi-check2-square"></i> Select Shown</button>
+        <button id="clearReactionUserSelection" class="btn ct-btn-quiet" type="button" disabled><i class="bi bi-square"></i> Clear</button>
+        <button id="blockSelectedReactionUsers" class="btn ct-btn-danger" type="button" disabled><i class="bi bi-person-x"></i> Block Selected</button>
+      </div>
+    </div>
+    <div id="commentReactionTotals" class="ct-reaction-audit-totals"></div>
+    <p id="commentSelectedSummary" class="ct-help ct-selected-summary">No users selected.</p>
+    <div class="table-responsive ct-table-wrap">
+      <table class="table ct-table ct-user-table mb-0">
+        <thead><tr><th>User</th><th>Matched reactions</th><th>Where</th><th>Status</th><th>Profile</th><th>Select</th></tr></thead>
+        <tbody id="commentReactionRows"><tr><td colspan="6" class="ct-table-empty">Enter a main comment ID and analyze reactions.</td></tr></tbody>
       </table>
     </div>
   </section>

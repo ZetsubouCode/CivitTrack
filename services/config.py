@@ -3,7 +3,7 @@ from pathlib import Path
 import os
 import json
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
 
@@ -42,6 +42,10 @@ def build_image_page_url(base_url: str, image_id: int) -> str:
 
 def build_article_page_url(base_url: str, article_id: int) -> str:
     return f"{base_url.rstrip('/')}/articles/{article_id}"
+
+
+def build_user_profile_url(base_url: str, username: str) -> str:
+    return f"{base_url.rstrip('/')}/user/{quote(username, safe='')}"
 
 
 def _int_env(name: str, default: int) -> int:
@@ -227,6 +231,10 @@ class Config:
 
     def article_page_url(self, article_id: int) -> str:
         return build_article_page_url(self.base_url, article_id)
+
+    @property
+    def user_profile_url(self) -> str | None:
+        return build_user_profile_url(self.base_url, self.username) if self.username else None
 
 
 def get_config() -> Config:

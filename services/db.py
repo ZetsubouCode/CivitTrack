@@ -107,6 +107,11 @@ CREATE TABLE IF NOT EXISTS snapshot_quality (
     quality_status TEXT NOT NULL,
     rest_model_count INTEGER DEFAULT 0,
     api_page_count INTEGER DEFAULT 0,
+    creator_model_count INTEGER DEFAULT 0,
+    known_model_count INTEGER DEFAULT 0,
+    known_model_recovery_count INTEGER DEFAULT 0,
+    model_detail_api_count INTEGER DEFAULT 0,
+    model_detail_trpc_count INTEGER DEFAULT 0,
     minor_discovery_enabled INTEGER DEFAULT 0,
     minor_discovery_status TEXT,
     minor_model_count INTEGER DEFAULT 0,
@@ -327,6 +332,11 @@ CREATE TABLE IF NOT EXISTS blocked_user_preference (
     raw_json TEXT,
     UNIQUE(user_id, username)
 );
+CREATE TABLE IF NOT EXISTS user_block_exclusion (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS comment_reaction_history (
     comment_id INTEGER PRIMARY KEY,
     first_seen_at TEXT NOT NULL,
@@ -454,6 +464,17 @@ def init_db() -> None:
             connection.execute(
                 "ALTER TABLE snapshot_quality ADD COLUMN generation_metric_count INTEGER DEFAULT 0"
             )
+        for name in (
+            "creator_model_count",
+            "known_model_count",
+            "known_model_recovery_count",
+            "model_detail_api_count",
+            "model_detail_trpc_count",
+        ):
+            if name not in quality_columns:
+                connection.execute(
+                    f"ALTER TABLE snapshot_quality ADD COLUMN {name} INTEGER DEFAULT 0"
+                )
         snapshot_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(snapshot)")
         }

@@ -50,16 +50,20 @@ from services.quality_service import get_snapshot_quality
 from services.settings_service import get_alert_settings, update_alert_settings
 from services.snapshot_service import delete_snapshot, take_snapshot
 from services.user_service import (
+    add_user_block_exclusions,
     analyze_comment_reactions,
     block_users_by_ids,
+    fetch_leaderboard_users,
     list_comment_reaction_history,
     list_my_comment_anchors,
+    list_user_block_exclusions,
+    remove_user_block_exclusions,
     resolve_users_by_ids,
     update_user_relationship,
 )
 
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 app = Flask(__name__)
 app.config["SECRET_KEY"] = get_config().secret_key
 app.config["MAX_CONTENT_LENGTH"] = MAX_RESTORE_BYTES
@@ -77,6 +81,8 @@ def _int_arg(name: str) -> int:
 def _json_action(action):
     try:
         return jsonify(action())
+    except CivitaiError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -86,9 +92,19 @@ def upload_too_large(_error):
     return jsonify({"ok": False, "error": "Backup upload is larger than the 256 MB restore limit."}), 413
 
 
+@app.errorhandler(CivitaiError)
+def civitai_error(error):
+    return jsonify({"ok": False, "error": str(error)}), 400
+
+
 @app.get("/")
 def dashboard():
-    return render_template("dashboard.html")
+    config = get_config()
+    return render_template(
+        "dashboard.html",
+        profile_url=config.user_profile_url,
+        profile_username=config.username,
+    )
 
 
 @app.get("/api/status")
@@ -315,6 +331,17 @@ def users_resolve():
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 
+@app.post("/api/users/leaderboard")
+def users_leaderboard():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Leaderboard request must be a JSON object."}), 400
+    try:
+        return jsonify(fetch_leaderboard_users(payload.get("leaderboard_id"), payload.get("limit", 1000)))
+    except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
 @app.post("/api/users/action")
 def users_action():
     payload = request.get_json(silent=True) or {}
@@ -323,6 +350,33 @@ def users_action():
     try:
         return jsonify(update_user_relationship(payload.get("user_id"), payload.get("action")))
     except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.get("/api/users/block-exclusions")
+def users_block_exclusions():
+    return _json_action(list_user_block_exclusions)
+
+
+@app.post("/api/users/block-exclusions")
+def users_block_exclusions_add():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Block exclusion request must be a JSON object."}), 400
+    try:
+        return jsonify(add_user_block_exclusions(payload.get("user_ids"), payload.get("users")))
+    except (CivitaiError, ValueError) as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+
+@app.delete("/api/users/block-exclusions")
+def users_block_exclusions_remove():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Block exclusion request must be a JSON object."}), 400
+    try:
+        return jsonify(remove_user_block_exclusions(payload.get("user_ids")))
+    except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 
 

@@ -16,6 +16,8 @@ def get_snapshot_quality(snapshot_id: int, username: str | None = None) -> dict:
             raise ValueError("Snapshot could not be found.")
         quality = connection.execute(
             "SELECT quality_status, rest_model_count, api_page_count, minor_discovery_enabled, "
+            "creator_model_count, known_model_count, known_model_recovery_count, "
+            "model_detail_api_count, model_detail_trpc_count, "
             "minor_discovery_status, minor_model_count, collection_metric_status, "
             "collection_metric_count, generation_metric_status, generation_metric_count, "
             "creator_profile_status, follower_count_available, "

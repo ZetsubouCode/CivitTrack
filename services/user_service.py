@@ -8,9 +8,15 @@ from .db import create_connection, dict_rows, transaction, utc_now
 
 
 MAX_USER_LOOKUP_IDS = 100
+MAX_BATCH_BLOCK_IDS = 1000
+MAX_LEADERBOARD_USERS = 1000
 MAX_COMMENT_REACTION_USERS = MAX_USER_LOOKUP_IDS
 MAX_COMMENT_THREAD_COMMENTS = 500
 COMMENT_REACTIONS = {"Like", "Dislike", "Laugh", "Cry", "Heart"}
+LEADERBOARDS = {
+    "guardian": "Guardian",
+    "knights-new-order": "Knights New Order",
+}
 
 
 def _safe_optional_int(value) -> int | None:
@@ -29,7 +35,7 @@ def _clean_text(value, default=None) -> str | None:
     return text or default
 
 
-def _parse_user_ids(value) -> list[int]:
+def _parse_user_ids(value, limit: int = MAX_USER_LOOKUP_IDS, action: str = "Lookup") -> list[int]:
     if isinstance(value, (list, tuple)):
         parts = value
     else:
@@ -56,8 +62,8 @@ def _parse_user_ids(value) -> list[int]:
         raise ValueError(f"User IDs must be positive integers. Invalid value(s): {sample}{suffix}")
     if not ids:
         raise ValueError("Enter at least one CivitAI user ID.")
-    if len(ids) > MAX_USER_LOOKUP_IDS:
-        raise ValueError(f"Lookup is limited to {MAX_USER_LOOKUP_IDS} user IDs at a time.")
+    if len(ids) > limit:
+        raise ValueError(f"{action} is limited to {limit} user IDs at a time.")
     return ids
 
 
@@ -102,6 +108,24 @@ def _local_user_matches(user_ids: list[int]) -> dict[int, dict]:
     return local
 
 
+def _user_exclusions(user_ids: list[int] | None = None) -> dict[int, dict]:
+    params: tuple = ()
+    where = ""
+    if user_ids:
+        placeholders = ", ".join("?" for _ in user_ids)
+        where = f"WHERE user_id IN ({placeholders})"
+        params = tuple(user_ids)
+    with create_connection() as connection:
+        rows = dict_rows(
+            connection.execute(
+                "SELECT user_id, username, created_at FROM user_block_exclusion "
+                f"{where} ORDER BY username COLLATE NOCASE, user_id",
+                params,
+            )
+        )
+    return {row["user_id"]: row for row in rows}
+
+
 def _profile_url(username: str | None) -> str | None:
     if not username:
         return None
@@ -121,18 +145,22 @@ def _lookup_account_state(client: CivitaiClient) -> tuple[set[int], set[int], li
     except CivitaiError as exc:
         warnings.append(f"Following state unavailable: {exc}")
     try:
-        preferences = client.fetch_hidden_preferences()
-        blocked = {
-            user_id for user_id in (
-                _safe_optional_int(item.get("id"))
-                for item in preferences.get("blockedUsers") or []
-                if isinstance(item, dict)
-            )
-            if user_id is not None and user_id > 0
-        }
+        blocked = _fetch_blocked_user_ids(client)
     except CivitaiError as exc:
         warnings.append(f"Blocked-user state unavailable: {exc}")
     return following, blocked, warnings
+
+
+def _fetch_blocked_user_ids(client: CivitaiClient) -> set[int]:
+    preferences = client.fetch_hidden_preferences()
+    return {
+        user_id for user_id in (
+            _safe_optional_int(item.get("id"))
+            for item in preferences.get("blockedUsers") or []
+            if isinstance(item, dict)
+        )
+        if user_id is not None and user_id > 0
+    }
 
 
 def _status_for_creator(username: str | None, deleted_at: str | None) -> str:
@@ -141,9 +169,10 @@ def _status_for_creator(username: str | None, deleted_at: str | None) -> str:
     return "found" if username else "found_without_username"
 
 
-def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int, dict], following: set[int], blocked: set[int], remote_error: str) -> list[dict]:
+def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int, dict], exclusions: dict[int, dict], following: set[int], blocked: set[int], remote_error: str) -> list[dict]:
     rows = []
     for user_id in user_ids:
+        excluded = user_id in exclusions
         creator = remote.get(user_id)
         if isinstance(creator, dict):
             username = _clean_text(creator.get("username"))
@@ -158,6 +187,7 @@ def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int,
                 "source": "civitai_trpc",
                 "following": user_id in following,
                 "blocked": user_id in blocked,
+                "excluded": excluded,
             })
             continue
         match = local.get(user_id)
@@ -172,6 +202,7 @@ def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int,
                 "source": match["source"],
                 "following": user_id in following,
                 "blocked": user_id in blocked,
+                "excluded": excluded,
             })
             continue
         rows.append({
@@ -185,6 +216,7 @@ def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int,
             "error": remote_error,
             "following": user_id in following,
             "blocked": user_id in blocked,
+            "excluded": excluded,
         })
     return rows
 
@@ -192,6 +224,7 @@ def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int,
 def resolve_users_by_ids(value) -> dict:
     user_ids = _parse_user_ids(value)
     local = _local_user_matches(user_ids)
+    exclusions = _user_exclusions(user_ids)
     client = CivitaiClient()
     following, blocked, state_warnings = _lookup_account_state(client)
     remote: dict[int, dict] = {}
@@ -200,7 +233,7 @@ def resolve_users_by_ids(value) -> dict:
         remote = client.fetch_creators_by_ids(user_ids)
     except CivitaiError as exc:
         remote_error = str(exc)
-    rows = _resolve_rows(user_ids, remote, local, following, blocked, remote_error)
+    rows = _resolve_rows(user_ids, remote, local, exclusions, following, blocked, remote_error)
     return {
         "ok": True,
         "ids": user_ids,
@@ -209,6 +242,126 @@ def resolve_users_by_ids(value) -> dict:
         "found_count": sum(1 for row in rows if row["username"]),
         "remote_error": remote_error,
         "warnings": state_warnings,
+    }
+
+
+def fetch_leaderboard_users(leaderboard_id, limit=MAX_LEADERBOARD_USERS) -> dict:
+    leaderboard_id = _clean_text(leaderboard_id, "").lower()
+    if leaderboard_id not in LEADERBOARDS:
+        raise ValueError("Leaderboard must be guardian or knights-new-order.")
+    try:
+        limit = min(MAX_LEADERBOARD_USERS, max(1, int(limit or MAX_LEADERBOARD_USERS)))
+    except (TypeError, ValueError):
+        limit = MAX_LEADERBOARD_USERS
+    config = get_config()
+    if not config.api_key:
+        raise ValueError("CivitAI API key is missing. Add CIVITAI_API_KEY before loading leaderboards.")
+    client = CivitaiClient(config)
+    following, blocked, warnings = _lookup_account_state(client)
+    rows = client.fetch_leaderboard(leaderboard_id, max_position=limit + 1)
+    exclusions = _user_exclusions([
+        user_id for user_id in (
+            _safe_optional_int((row.get("user") or {}).get("id"))
+            for row in rows
+            if isinstance(row.get("user"), dict)
+        )
+        if user_id is not None and user_id > 0
+    ])
+    users = []
+    for row in rows:
+        user = row.get("user") if isinstance(row.get("user"), dict) else {}
+        user_id = _safe_optional_int(user.get("id"))
+        if user_id is None or user_id <= 0:
+            continue
+        username = _clean_text(user.get("username"))
+        deleted_at = _clean_text(user.get("deletedAt"))
+        users.append({
+            "user_id": user_id,
+            "username": username,
+            "profile_url": _profile_url(username),
+            "image": _clean_text(user.get("image")),
+            "deleted_at": deleted_at,
+            "status": _status_for_creator(username, deleted_at),
+            "source": f"leaderboard:{leaderboard_id}",
+            "following": user_id in following,
+            "blocked": user_id in blocked,
+            "excluded": user_id in exclusions,
+            "leaderboard_id": leaderboard_id,
+            "leaderboard_title": LEADERBOARDS[leaderboard_id],
+            "leaderboard_position": _safe_optional_int(row.get("position")),
+            "leaderboard_score": _safe_optional_int(row.get("score")),
+            "metrics": row.get("metrics") if isinstance(row.get("metrics"), list) else [],
+            "delta": row.get("delta") if isinstance(row.get("delta"), dict) else None,
+        })
+        if len(users) >= limit:
+            break
+    return {
+        "ok": True,
+        "leaderboard_id": leaderboard_id,
+        "leaderboard_title": LEADERBOARDS[leaderboard_id],
+        "users": users,
+        "ids": [row["user_id"] for row in users],
+        "count": len(users),
+        "found_count": sum(1 for row in users if row["username"]),
+        "blocked_count": sum(1 for row in users if row["blocked"]),
+        "blockable_count": sum(1 for row in users if not row["blocked"] and not row["excluded"]),
+        "excluded_count": sum(1 for row in users if row["excluded"]),
+        "warnings": warnings,
+    }
+
+
+def list_user_block_exclusions() -> dict:
+    return {
+        "ok": True,
+        "exclusions": list(_user_exclusions().values()),
+    }
+
+
+def add_user_block_exclusions(user_ids, users=None) -> dict:
+    ids = _parse_user_ids(user_ids)
+    usernames = {}
+    for user in users or []:
+        if not isinstance(user, dict):
+            continue
+        user_id = _safe_optional_int(user.get("user_id"))
+        username = _clean_text(user.get("username"))
+        if user_id and username:
+            usernames[user_id] = username
+    if any(user_id not in usernames for user_id in ids):
+        resolved = resolve_users_by_ids([user_id for user_id in ids if user_id not in usernames])
+        for row in resolved.get("users", []):
+            username = _clean_text(row.get("username"))
+            if username:
+                usernames[row["user_id"]] = username
+    now = utc_now()
+    with transaction() as connection:
+        connection.executemany(
+            "INSERT INTO user_block_exclusion (user_id, username, created_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "username = COALESCE(excluded.username, user_block_exclusion.username)",
+            [(user_id, usernames.get(user_id), now) for user_id in ids],
+        )
+    exclusions = list(_user_exclusions(ids).values())
+    return {
+        "ok": True,
+        "added_ids": ids,
+        "added_count": len(ids),
+        "exclusions": exclusions,
+    }
+
+
+def remove_user_block_exclusions(user_ids) -> dict:
+    ids = _parse_user_ids(user_ids)
+    with transaction() as connection:
+        connection.executemany(
+            "DELETE FROM user_block_exclusion WHERE user_id = ?",
+            [(user_id,) for user_id in ids],
+        )
+    return {
+        "ok": True,
+        "removed_ids": ids,
+        "removed_count": len(ids),
     }
 
 
@@ -339,6 +492,7 @@ def analyze_comment_reactions(comment_id) -> dict:
     }
     warnings.extend(resolved.get("warnings", []))
     user_map = {row["user_id"]: row for row in resolved.get("users", [])}
+    exclusions = _user_exclusions(reactor_ids)
     candidates = []
     for user_id in reactor_ids:
         events = [event for event in reaction_events if event["user_id"] == user_id]
@@ -349,9 +503,11 @@ def analyze_comment_reactions(comment_id) -> dict:
             "profile_url": _profile_url(reaction_usernames.get(user_id)),
             "following": False,
             "blocked": False,
+            "excluded": user_id in exclusions,
             "status": "found" if reaction_usernames.get(user_id) else "unresolved",
             "source": "comment_reaction",
         })
+        user = {**user, "excluded": user_id in exclusions}
         if not user.get("username") and reaction_usernames.get(user_id):
             user = {
                 **user,
@@ -460,6 +616,32 @@ def _comment_reaction_totals(comment: dict) -> dict:
     return totals
 
 
+def _known_comment_model_ids(username: str, limit: int) -> list[int]:
+    max_models = min(500, max(50, limit * 3))
+    with create_connection() as connection:
+        latest = connection.execute(
+            "SELECT id FROM snapshot WHERE username = ? AND api_ok = 1 "
+            "ORDER BY checked_at DESC, id DESC LIMIT 1",
+            (username,),
+        ).fetchone()
+        if latest:
+            rows = connection.execute(
+                "SELECT model_id FROM model_snapshot WHERE snapshot_id = ? "
+                "ORDER BY comment_count DESC, model_id DESC LIMIT ?",
+                (latest["id"], max_models),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT DISTINCT model_id FROM model_image "
+                "WHERE model_id IS NOT NULL ORDER BY model_id DESC LIMIT ?",
+                (max_models,),
+            ).fetchall()
+    return [
+        parsed for parsed in (_safe_optional_int(row["model_id"]) for row in rows)
+        if parsed is not None and parsed > 0
+    ]
+
+
 def list_my_comment_anchors(limit: int = 100, include_replies: bool = True) -> dict:
     config = get_config()
     if not config.username:
@@ -473,7 +655,16 @@ def list_my_comment_anchors(limit: int = 100, include_replies: bool = True) -> d
     user_id = _safe_optional_int((profile or {}).get("id"))
     if not user_id:
         raise ValueError("Could not resolve the configured CivitAI username to a user ID.")
-    comments = client.fetch_legacy_comments_by_user(user_id, limit=min(100, limit), max_pages=max(1, (limit + 99) // 100))
+    model_ids = _known_comment_model_ids(config.username, limit)
+    if not model_ids:
+        raise ValueError("Take a model snapshot before scanning your comments.")
+    comments, warnings = client.fetch_legacy_comments_by_user_for_models(
+        user_id,
+        model_ids,
+        limit=min(100, limit),
+        max_pages_per_model=1,
+    )
+    comments.sort(key=lambda item: str(item.get("createdAt") or ""), reverse=True)
     anchors = []
     for comment in comments:
         comment_id = _safe_optional_int(comment.get("id"))
@@ -505,32 +696,62 @@ def list_my_comment_anchors(limit: int = 100, include_replies: bool = True) -> d
         "user_id": user_id,
         "comments": anchors,
         "count": len(anchors),
+        "searched_model_count": len(model_ids),
+        "warnings": warnings,
     }
 
 
 def block_users_by_ids(user_ids) -> dict:
-    ids = _parse_user_ids(user_ids)
+    ids = _parse_user_ids(user_ids, limit=MAX_BATCH_BLOCK_IDS, action="Batch block")
+    exclusions = _user_exclusions(ids)
     config = get_config()
     if not config.api_key:
         raise ValueError("CivitAI API key is missing. Add CIVITAI_API_KEY before blocking users.")
     client = CivitaiClient(config)
+    try:
+        already_blocked_ids = _fetch_blocked_user_ids(client)
+    except CivitaiError as exc:
+        raise CivitaiError(f"Blocked-user state unavailable; batch block was not run: {exc}") from exc
+    allowed_ids = [
+        user_id for user_id in ids
+        if user_id not in exclusions and user_id not in already_blocked_ids
+    ]
+    skipped_excluded_ids = [user_id for user_id in ids if user_id in exclusions]
+    skipped_blocked_ids = [user_id for user_id in ids if user_id in already_blocked_ids]
+    if not allowed_ids:
+        return {
+            "ok": True,
+            "blocked_ids": [],
+            "blocked_count": 0,
+            "skipped_excluded_ids": skipped_excluded_ids,
+            "skipped_excluded_count": len(skipped_excluded_ids),
+            "skipped_blocked_ids": skipped_blocked_ids,
+            "skipped_blocked_count": len(skipped_blocked_ids),
+            "failures": [],
+            "failed_count": 0,
+            "users": [],
+            "warnings": [],
+        }
     blocked = []
     failures = []
-    for user_id in ids:
+    for user_id in allowed_ids:
         try:
             client.set_blocked_user(user_id, True)
             blocked.append(user_id)
         except CivitaiError as exc:
             failures.append({"user_id": user_id, "error": str(exc)})
-    resolved = resolve_users_by_ids(blocked) if blocked else {"users": [], "warnings": []}
     return {
         "ok": True,
         "blocked_ids": blocked,
         "blocked_count": len(blocked),
+        "skipped_excluded_ids": skipped_excluded_ids,
+        "skipped_excluded_count": len(skipped_excluded_ids),
+        "skipped_blocked_ids": skipped_blocked_ids,
+        "skipped_blocked_count": len(skipped_blocked_ids),
         "failures": failures,
         "failed_count": len(failures),
-        "users": resolved.get("users", []),
-        "warnings": resolved.get("warnings", []),
+        "users": [],
+        "warnings": [],
     }
 
 

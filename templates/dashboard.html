@@ -10,6 +10,13 @@
       </div>
     </div>
     <div class="ct-nav-status">
+      {% if profile_url %}
+      <a class="btn ct-btn-quiet ct-profile-link" href="{{ profile_url }}" target="_blank" rel="noopener" title="Open @{{ profile_username }} on CivitAI" aria-label="Open @{{ profile_username }} profile on CivitAI">
+        <i class="bi bi-person-circle"></i>
+        <span>{{ profile_username }}</span>
+        <i class="bi bi-box-arrow-up-right"></i>
+      </a>
+      {% endif %}
       <span id="apiStatusPill" class="ct-pill ct-pill-muted">Checking setup</span>
       <small id="navLastSnapshot">No snapshots yet</small>
     </div>
@@ -438,18 +445,71 @@
     </form>
   </section>
 
+  <section class="ct-card ct-user-lookup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Leaderboard import</span>
+        <h2>Load Top 1000</h2>
+      </div>
+      <span id="leaderboardLookupPill" class="ct-pill ct-pill-muted">Ready</span>
+    </div>
+    <form id="leaderboardLookupForm" class="ct-leaderboard-form">
+      <label class="ct-filter-field" for="leaderboardSelect">
+        <span><i class="bi bi-trophy"></i> Leaderboard</span>
+        <select id="leaderboardSelect" class="form-select">
+          <option value="knights-new-order">Knights New Order</option>
+          <option value="guardian">Guardian</option>
+        </select>
+      </label>
+      <div class="ct-settings-actions">
+        <button id="loadLeaderboardUsers" class="btn ct-btn-primary" type="submit"><i class="bi bi-cloud-arrow-down"></i> Load Top 1000</button>
+        <small id="leaderboardLookupHelp" class="ct-help">Loaded rows include current blocked/protected state before any batch block.</small>
+      </div>
+    </form>
+  </section>
+
+  <section class="ct-card ct-user-lookup">
+    <div class="ct-section-heading">
+      <div>
+        <span class="ct-eyebrow">Batch block safety</span>
+        <h2>Block Exclusion List</h2>
+      </div>
+      <small id="userExclusionSummary" class="ct-help">Loading protected users.</small>
+    </div>
+    <form id="userExclusionForm">
+      <label class="ct-note-field" for="userExclusionInput">Protected CivitAI user IDs</label>
+      <textarea id="userExclusionInput" class="form-control ct-user-id-input" rows="3" placeholder="12042163&#10;123456, 789012"></textarea>
+      <div class="ct-settings-actions">
+        <button id="addUserExclusions" class="btn ct-btn-secondary" type="submit"><i class="bi bi-shield-check"></i> Add To Exclusions</button>
+        <small class="ct-help">Protected users are skipped by Block Selected and Select Shown.</small>
+      </div>
+    </form>
+    <div class="table-responsive ct-table-wrap ct-exclusion-wrap">
+      <table class="table ct-table ct-user-table mb-0">
+        <thead><tr><th>User ID</th><th>Username</th><th>Added</th><th>Action</th></tr></thead>
+        <tbody id="userExclusionRows"><tr><td colspan="4" class="ct-table-empty">Loading protected users.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
   <section class="ct-card ct-table-card">
     <div class="ct-section-heading ct-table-heading">
       <div>
         <span class="ct-eyebrow">Lookup results</span>
         <h2>Resolved Users</h2>
       </div>
-      <small id="userResultSummary" class="ct-help">No lookup run yet.</small>
+      <div class="ct-result-actions">
+        <small id="userResultSummary" class="ct-help">No lookup run yet.</small>
+        <button id="selectAllUsers" class="btn ct-btn-quiet" type="button" disabled><i class="bi bi-check2-square"></i> Select Blockable</button>
+        <button id="clearUserSelection" class="btn ct-btn-quiet" type="button" disabled><i class="bi bi-square"></i> Clear</button>
+        <button id="blockSelectedUsers" class="btn ct-btn-danger" type="button" disabled><i class="bi bi-person-x"></i> Block Selected</button>
+      </div>
     </div>
+    <p id="userSelectedSummary" class="ct-help ct-selected-summary">No users selected.</p>
     <div class="table-responsive ct-table-wrap">
       <table class="table ct-table ct-user-table mb-0">
-        <thead><tr><th>User ID</th><th>Username</th><th>Status</th><th>Source</th><th>Profile</th><th>Actions</th></tr></thead>
-        <tbody id="userRows"><tr><td colspan="6" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr></tbody>
+        <thead><tr><th>User ID</th><th>Username</th><th>Status</th><th>Source</th><th>Profile</th><th>Actions</th><th>Select</th></tr></thead>
+        <tbody id="userRows"><tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr></tbody>
       </table>
     </div>
   </section>

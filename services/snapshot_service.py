@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from .alert_service import generate_snapshot_alerts, insert_alert
 from .civitai_client import CivitaiClient, CivitaiError
 from .config import build_model_page_url, get_config
-from .db import insert_sync_log, transaction, utc_now
+from .db import create_connection, insert_sync_log, transaction, utc_now
 
 
 NOTE_TYPES = {
@@ -183,6 +183,27 @@ def _insert_dict(connection, table: str, row: dict) -> None:
     )
 
 
+def _known_snapshot_model_ids(username: str, model_types: list[str]) -> list[int]:
+    if not username:
+        return []
+    clauses = ["s.username = ?", "s.api_ok = 1", "m.model_id > 0"]
+    values: list = [username]
+    if model_types:
+        placeholders = ", ".join("?" for _ in model_types)
+        clauses.append(f"LOWER(COALESCE(m.model_type, '')) IN ({placeholders})")
+        values.extend(model_type.casefold() for model_type in model_types)
+    with create_connection() as connection:
+        rows = connection.execute(
+            "SELECT DISTINCT m.model_id "
+            "FROM model_snapshot m "
+            "JOIN snapshot s ON s.id = m.snapshot_id "
+            f"WHERE {' AND '.join(clauses)} "
+            "ORDER BY m.model_id",
+            values,
+        ).fetchall()
+    return [safe_int(row["model_id"]) for row in rows if safe_int(row["model_id"])]
+
+
 def _quality_status(models: list[dict], metadata: dict, warnings: list[str]) -> str:
     if not models:
         return "warning"
@@ -214,6 +235,11 @@ def _insert_snapshot_quality(
             "quality_status": quality_status,
             "rest_model_count": safe_int(metadata.get("rest_model_count")),
             "api_page_count": safe_int(metadata.get("api_page_count")),
+            "creator_model_count": safe_int(metadata.get("creator_model_count")),
+            "known_model_count": safe_int(metadata.get("known_model_count")),
+            "known_model_recovery_count": safe_int(metadata.get("known_model_recovery_count")),
+            "model_detail_api_count": safe_int(metadata.get("model_detail_api_count")),
+            "model_detail_trpc_count": safe_int(metadata.get("model_detail_trpc_count")),
             "minor_discovery_enabled": int(bool(metadata.get("minor_discovery_enabled"))),
             "minor_discovery_status": metadata.get("minor_discovery_status"),
             "minor_model_count": safe_int(metadata.get("minor_model_count")),
@@ -287,8 +313,9 @@ def take_snapshot(
     client = CivitaiClient(config)
     warnings: list[str] = []
     try:
+        known_model_ids = _known_snapshot_model_ids(config.username, config.model_types)
         models, info, fetch_warnings, metadata = client.fetch_models(
-            config.username, config.model_types
+            config.username, config.model_types, known_model_ids=known_model_ids
         )
         warnings.extend(fetch_warnings)
     except CivitaiError as exc:
@@ -337,16 +364,17 @@ def take_snapshot(
             if model_row["model_id"]:
                 normalized_models.append(model_row)
                 version_rows.extend(rows)
+        known_collected_counts = [
+            row["collected_count"]
+            for row in normalized_models
+            if row["collected_count"] is not None
+        ]
         summary = {
             "model_count": len(normalized_models),
             "follower_count": follower_count,
             "total_download_count": sum(row["download_count"] for row in normalized_models),
             "total_reaction_count": sum(row["reaction_count"] for row in normalized_models),
-            "total_collected_count": (
-                sum(row["collected_count"] for row in normalized_models)
-                if all(row["collected_count"] is not None for row in normalized_models)
-                else None
-            ),
+            "total_collected_count": sum(known_collected_counts) if known_collected_counts else None,
             "total_generation_count": (
                 sum(row["generation_count"] for row in normalized_models)
                 if all(row["generation_count"] is not None for row in normalized_models)

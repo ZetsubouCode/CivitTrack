@@ -13,6 +13,8 @@ class CivitaiError(RuntimeError):
 
 GENERATION_BATCH_SIZE = 20
 GENERATION_BATCH_DELAY_SECONDS = 0.15
+MODEL_DETAIL_BATCH_SIZE = 20
+MODEL_DETAIL_BATCH_DELAY_SECONDS = 0.15
 
 
 class CivitaiClient:
@@ -62,16 +64,73 @@ class CivitaiClient:
         raise CivitaiError("CivitAI is temporarily unavailable. Try again later.")
 
     @staticmethod
-    def _trpc_result(payload: dict, fallback_error: str) -> dict | list | None:
+    def _decode_indexed_payload(value):
+        if not isinstance(value, list):
+            return value
+        memo = {}
+
+        def decode_ref(ref):
+            if not isinstance(ref, int):
+                return decode_value(ref)
+            if ref in memo:
+                return memo[ref]
+            if ref < 0 or ref >= len(value):
+                return None
+            decoded = decode_value(value[ref])
+            memo[ref] = decoded
+            return decoded
+
+        def decode_value(item):
+            if isinstance(item, list):
+                if item and item[0] == "Date":
+                    return decode_ref(item[1]) if len(item) > 1 else None
+                if item and item[0] == "Set":
+                    return [decode_ref(ref) for ref in item[1:]]
+                if item and item[0] == "Map":
+                    return {
+                        decode_ref(item[index]): decode_ref(item[index + 1])
+                        for index in range(1, len(item) - 1, 2)
+                    }
+                return [decode_ref(ref) for ref in item]
+            if isinstance(item, dict):
+                decoded = {}
+                for key, ref in item.items():
+                    decoded[key] = decode_ref(ref)
+                return decoded
+            return item
+
+        return decode_ref(0)
+
+    @classmethod
+    def _decode_trpc_data(cls, data, fallback_error: str):
+        if isinstance(data, dict) and "json" in data:
+            return data.get("json")
+        if isinstance(data, str):
+            try:
+                encoded = json.loads(data)
+            except ValueError as exc:
+                raise CivitaiError(fallback_error) from exc
+            return cls._decode_indexed_payload(encoded)
+        return data
+
+    @classmethod
+    def _trpc_result(cls, payload: dict, fallback_error: str) -> dict | list | int | str | None:
         if payload.get("error"):
             error = payload["error"]
+            if isinstance(error, str):
+                try:
+                    decoded_error = cls._decode_indexed_payload(json.loads(error))
+                except ValueError:
+                    decoded_error = None
+                error = decoded_error if isinstance(decoded_error, dict) else {"message": error}
             message = (
                 ((error.get("json") or {}).get("message") if isinstance(error.get("json"), dict) else None)
                 or error.get("message")
                 or fallback_error
             )
             raise CivitaiError(message)
-        return ((payload.get("result") or {}).get("data") or {}).get("json")
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        return cls._decode_trpc_data(result.get("data"), fallback_error)
 
     def post_trpc(self, procedure: str, data: dict) -> dict | list | None:
         url = f"{self.config.base_url}/api/trpc/{procedure}"
@@ -186,6 +245,134 @@ class CivitaiClient:
     @staticmethod
     def _safe_optional_bool(value) -> bool | None:
         return value if isinstance(value, bool) else None
+
+    @staticmethod
+    def _first_rank_value(rank: dict, *names: str):
+        for name in names:
+            if rank.get(name) is not None:
+                return rank[name]
+        return None
+
+    @classmethod
+    def _copy_rank_counts_to_stats(cls, item: dict) -> None:
+        rank = item.get("rank") if isinstance(item.get("rank"), dict) else {}
+        if not rank:
+            return
+        stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
+        item["stats"] = stats
+        for target, names in (
+            ("downloadCount", ("downloadCount", "downloadCountAllTime")),
+            ("thumbsUpCount", ("thumbsUpCount", "thumbsUpCountAllTime")),
+            ("thumbsDownCount", ("thumbsDownCount", "thumbsDownCountAllTime")),
+            ("heartCount", ("heartCount", "heartCountAllTime")),
+            ("laughCount", ("laughCount", "laughCountAllTime")),
+            ("cryCount", ("cryCount", "cryCountAllTime")),
+            ("commentCount", ("commentCount", "commentCountAllTime")),
+            ("collectedCount", ("collectedCount", "collectedCountAllTime")),
+            ("tippedAmountCount", ("tippedAmountCount", "tippedAmountCountAllTime")),
+        ):
+            if stats.get(target) is None:
+                value = cls._first_rank_value(rank, *names)
+                if value is not None:
+                    stats[target] = value
+
+    @classmethod
+    def _normalize_site_model_detail(cls, item: dict) -> dict:
+        cls._copy_rank_counts_to_stats(item)
+        user = item.get("user") if isinstance(item.get("user"), dict) else None
+        if user and not isinstance(item.get("creator"), dict):
+            item["creator"] = {
+                "username": user.get("username"),
+                "image": user.get("image"),
+            }
+        for version in item.get("modelVersions") or []:
+            if isinstance(version, dict):
+                cls._copy_rank_counts_to_stats(version)
+        return item
+
+    def _fetch_model_details_by_trpc(self, model_ids: list[int]) -> list[dict]:
+        details: list[dict] = []
+        for start in range(0, len(model_ids), MODEL_DETAIL_BATCH_SIZE):
+            batch_ids = model_ids[start:start + MODEL_DETAIL_BATCH_SIZE]
+            try:
+                results = self.get_trpc_batch(
+                    "model.getById",
+                    [{"id": model_id} for model_id in batch_ids],
+                )
+            except CivitaiError:
+                results = []
+                for model_id in batch_ids:
+                    try:
+                        results.append(self.get_trpc_batch("model.getById", [{"id": model_id}])[0])
+                    except CivitaiError:
+                        results.append(None)
+            retry_ids = []
+            for model_id, result in zip(batch_ids, results):
+                if isinstance(result, dict) and isinstance(result.get("id"), int):
+                    details.append(self._normalize_site_model_detail(result))
+                else:
+                    retry_ids.append(model_id)
+            for model_id in retry_ids:
+                try:
+                    result = self.get_trpc_batch("model.getById", [{"id": model_id}])[0]
+                except CivitaiError:
+                    continue
+                if isinstance(result, dict) and isinstance(result.get("id"), int):
+                    details.append(self._normalize_site_model_detail(result))
+            if start + MODEL_DETAIL_BATCH_SIZE < len(model_ids):
+                time.sleep(MODEL_DETAIL_BATCH_DELAY_SECONDS)
+        return details
+
+    def _fetch_additional_model_details(
+        self,
+        model_ids: list[int],
+        info: list[str],
+        warnings: list[str],
+        metadata: dict,
+    ) -> list[dict]:
+        details: list[dict] = []
+        trpc_candidate_ids: list[int] = []
+        for model_id in model_ids:
+            try:
+                details.append(self.get_json(f"{self.config.base_url}/api/v1/models/{model_id}"))
+            except CivitaiError:
+                trpc_candidate_ids.append(model_id)
+
+        trpc_details = self._fetch_model_details_by_trpc(trpc_candidate_ids)
+        details.extend(trpc_details)
+        loaded_ids = {detail["id"] for detail in details if isinstance(detail.get("id"), int)}
+        metadata["model_detail_api_count"] = metadata.get("model_detail_api_count", 0) + (
+            len(details) - len(trpc_details)
+        )
+        metadata["model_detail_trpc_count"] = metadata.get("model_detail_trpc_count", 0) + len(trpc_details)
+        if details:
+            info.append(
+                f"Loaded {len(details)} additional model details "
+                f"({len(details) - len(trpc_details)} REST, {len(trpc_details)} tRPC fallback)."
+            )
+        failed_count = len(set(model_ids) - loaded_ids)
+        if failed_count:
+            warnings.append(
+                f"Could not load {failed_count} additional creator models from REST or tRPC."
+            )
+        return details
+
+    @staticmethod
+    def _merge_models(items: list[dict], additions: list[dict], model_types: list[str]) -> int:
+        wanted_types = {model_type.casefold() for model_type in model_types}
+        known_ids = {item.get("id") for item in items}
+        merged = 0
+        for item in additions:
+            model_id = item.get("id")
+            model_type = str(item.get("type") or "")
+            if not isinstance(model_id, int) or model_id in known_ids:
+                continue
+            if wanted_types and model_type.casefold() not in wanted_types:
+                continue
+            items.append(item)
+            known_ids.add(model_id)
+            merged += 1
+        return merged
 
     def _enrich_generation_counts(
         self,
@@ -343,7 +530,8 @@ class CivitaiClient:
             payload = self.get_json(
                 f"{url}?{urlencode({'input': json.dumps({'json': query}, separators=(',', ':'))})}"
             )
-            result = ((payload.get("result") or {}).get("data") or {}).get("json") or {}
+            result = self._trpc_result(payload, "CivitAI rejected the creator models request.")
+            result = result if isinstance(result, dict) else {}
             page_items = result.get("items") or []
             if not isinstance(page_items, list):
                 raise CivitaiError("CivitAI returned an unexpected creator models list.")
@@ -378,16 +566,32 @@ class CivitaiClient:
             enriched += 1
         return enriched
 
+    @staticmethod
+    def _collection_metric_count(items: list[dict]) -> int:
+        return sum(
+            1 for item in items
+            if isinstance(item.get("stats"), dict)
+            and item["stats"].get("collectedCount") is not None
+        )
+
     def fetch_models(
-        self, username: str, model_types: list[str]
+        self, username: str, model_types: list[str], known_model_ids: list[int] | None = None
     ) -> tuple[list[dict], list[str], list[str], dict]:
         items, info, api_page_count = self._fetch_rest_models(username, model_types)
         warnings: list[str] = []
+        known_model_ids = [
+            model_id for model_id in (known_model_ids or [])
+            if isinstance(model_id, int) and model_id > 0
+        ]
         metadata = {
             "rest_model_count": len(items),
             "api_page_count": api_page_count,
             "creator_models_available": False,
             "creator_model_count": 0,
+            "known_model_count": len(known_model_ids),
+            "known_model_recovery_count": 0,
+            "model_detail_api_count": 0,
+            "model_detail_trpc_count": 0,
             "minor_discovery_enabled": self.config.include_minor,
             "minor_discovery_status": "skipped" if not self.config.include_minor else "unavailable",
             "minor_model_count": 0,
@@ -404,6 +608,13 @@ class CivitaiClient:
                 warnings.append(
                     "Minor-model discovery was unavailable. Saved the standard CivitAI REST catalog only."
                 )
+            missing_known_ids = sorted(set(known_model_ids) - {item.get("id") for item in items})
+            recovered = self._fetch_additional_model_details(
+                missing_known_ids, info, warnings, metadata
+            )
+            metadata["known_model_recovery_count"] = self._merge_models(
+                items, recovered, model_types
+            )
             self._enrich_generation_counts(items, info, warnings, metadata)
             return items, info, warnings, metadata
 
@@ -411,9 +622,19 @@ class CivitaiClient:
         metadata["creator_model_count"] = len(creator_models)
 
         if not self.config.include_minor:
+            missing_known_ids = sorted(set(known_model_ids) - {item.get("id") for item in items})
+            recovered = self._fetch_additional_model_details(
+                missing_known_ids, info, warnings, metadata
+            )
+            metadata["known_model_recovery_count"] = self._merge_models(
+                items, recovered, model_types
+            )
             enriched = self._enrich_collection_counts(items, creator_models)
-            metadata["collection_metric_count"] = enriched
-            metadata["collection_metric_status"] = "success" if enriched == len(items) else "partial"
+            loaded_collection_count = self._collection_metric_count(items)
+            metadata["collection_metric_count"] = loaded_collection_count
+            metadata["collection_metric_status"] = (
+                "success" if loaded_collection_count == len(items) else "partial"
+            )
             info.append(f"Loaded collection metrics for {enriched} creator models.")
             self._enrich_generation_counts(items, info, warnings, metadata)
             return items, info, warnings, metadata
@@ -422,27 +643,25 @@ class CivitaiClient:
         creator_model_ids = {
             item["id"] for item in creator_models if isinstance(item.get("id"), int)
         }
-        missing_ids = sorted(creator_model_ids - known_ids)
-        failed_ids = []
-        for model_id in missing_ids:
-            try:
-                items.append(self.get_json(f"{self.config.base_url}/api/v1/models/{model_id}"))
-            except CivitaiError:
-                failed_ids.append(model_id)
-        enriched = self._enrich_collection_counts(items, creator_models)
-        metadata["minor_model_count"] = len(missing_ids) - len(failed_ids)
-        metadata["minor_discovery_status"] = "partial" if failed_ids else "success"
-        metadata["collection_metric_count"] = enriched
-        metadata["collection_metric_status"] = "success" if enriched == len(items) else "partial"
-        info.append(f"Loaded collection metrics for {enriched} creator models.")
-        info.append(
-            f"Minor-model discovery found {len(missing_ids)} additional creator models."
+        missing_ids = sorted((creator_model_ids | set(known_model_ids)) - known_ids)
+        additional_details = self._fetch_additional_model_details(
+            missing_ids, info, warnings, metadata
         )
-        if failed_ids:
-            warnings.append(
-                f"Could not load {len(failed_ids)} additional minor models. "
-                "Saved the models that were available."
-            )
+        merged_count = self._merge_models(items, additional_details, model_types)
+        metadata["known_model_recovery_count"] = len(
+            set(known_model_ids) & {item.get("id") for item in additional_details}
+        )
+        failed_count = len(missing_ids) - merged_count
+        enriched = self._enrich_collection_counts(items, creator_models)
+        metadata["minor_model_count"] = merged_count
+        metadata["minor_discovery_status"] = "partial" if failed_count else "success"
+        loaded_collection_count = self._collection_metric_count(items)
+        metadata["collection_metric_count"] = loaded_collection_count
+        metadata["collection_metric_status"] = (
+            "success" if loaded_collection_count == len(items) else "partial"
+        )
+        info.append(f"Loaded collection metrics for {enriched} creator models.")
+        info.append(f"Minor-model discovery found {merged_count} additional creator models.")
         self._enrich_generation_counts(items, info, warnings, metadata)
         return items, info, warnings, metadata
 
@@ -489,6 +708,15 @@ class CivitaiClient:
             parsed for parsed in (self._safe_optional_int(item) for item in result)
             if parsed is not None and parsed > 0
         ]
+
+    def fetch_leaderboard(self, leaderboard_id: str, max_position: int = 1001) -> list[dict]:
+        result = self.post_trpc(
+            "leaderboard.getLeaderboard",
+            {"id": str(leaderboard_id), "maxPosition": int(max_position)},
+        )
+        if not isinstance(result, list):
+            raise CivitaiError("CivitAI returned an unexpected leaderboard response.")
+        return [item for item in result if isinstance(item, dict)]
 
     def toggle_follow_user(self, user_id: int) -> dict:
         result = self.post_trpc("user.toggleFollow", {"targetUserId": int(user_id)})
@@ -574,6 +802,47 @@ class CivitaiClient:
             visited.add(next_url)
             url = next_url
             params = None
+        return items, fetched_pages
+
+    def fetch_model_images(
+        self,
+        model_id: int,
+        pages: int = 1,
+        limit: int = 100,
+        with_meta: bool = False,
+    ) -> tuple[list[dict], int]:
+        url = f"{self.config.base_url}/api/trpc/image.getInfinite"
+        cursor = None
+        items: list[dict] = []
+        visited_cursors: set[str] = set()
+        fetched_pages = 0
+        for _ in range(min(self.config.max_pages, max(1, pages))):
+            query = {
+                "modelId": int(model_id),
+                "limit": min(200, max(1, int(limit))),
+                "browsingLevel": 31,
+                "include": [],
+                "withMeta": bool(with_meta),
+            }
+            if cursor is not None:
+                query["cursor"] = cursor
+            payload = self.get_json(
+                f"{url}?{urlencode({'input': json.dumps({'json': query}, separators=(',', ':'))})}"
+            )
+            result = self._trpc_result(payload, "CivitAI rejected the model image request.")
+            result = result if isinstance(result, dict) else {}
+            page_items = result.get("items") or []
+            if not isinstance(page_items, list):
+                raise CivitaiError("CivitAI returned an unexpected model image list.")
+            fetched_pages += 1
+            items.extend(item for item in page_items if isinstance(item, dict))
+            cursor = result.get("nextCursor")
+            if not cursor or not page_items:
+                break
+            cursor_key = json.dumps(cursor, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            if cursor_key in visited_cursors:
+                raise CivitaiError("CivitAI model image pagination repeated unexpectedly.")
+            visited_cursors.add(cursor_key)
         return items, fetched_pages
 
     def fetch_image_by_id(self, image_id: int) -> dict | None:
@@ -735,6 +1004,62 @@ class CivitaiClient:
                 raise CivitaiError("CivitAI user comment pagination repeated unexpectedly.")
             visited_cursors.add(cursor_key)
         return items
+
+    def fetch_legacy_comments_by_user_for_models(
+        self,
+        user_id: int,
+        model_ids: list[int],
+        limit: int = 100,
+        max_pages_per_model: int = 1,
+    ) -> tuple[list[dict], list[str]]:
+        ids = []
+        seen_ids = set()
+        for model_id in model_ids:
+            parsed = self._safe_optional_int(model_id)
+            if parsed is None or parsed <= 0 or parsed in seen_ids:
+                continue
+            ids.append(parsed)
+            seen_ids.add(parsed)
+
+        comments: list[dict] = []
+        warnings: list[str] = []
+        seen_comments = set()
+        for model_id in ids:
+            cursor = None
+            for _ in range(max(1, max_pages_per_model)):
+                query = {
+                    "modelId": model_id,
+                    "userId": int(user_id),
+                    "limit": min(100, max(1, int(limit))),
+                    "sort": "newest",
+                }
+                if cursor is not None:
+                    query["cursor"] = cursor
+                try:
+                    result = self.get_trpc_batch("comment.getAll", [query])[0]
+                except CivitaiError as exc:
+                    if len(warnings) < 5:
+                        warnings.append(f"Comments unavailable for model {model_id}: {exc}")
+                    break
+                if not isinstance(result, dict):
+                    break
+                page_items = result.get("comments") or []
+                if not isinstance(page_items, list):
+                    if len(warnings) < 5:
+                        warnings.append(f"CivitAI returned an unexpected comment list for model {model_id}.")
+                    break
+                for item in page_items:
+                    if not isinstance(item, dict):
+                        continue
+                    comment_id = self._safe_optional_int(item.get("id"))
+                    if not comment_id or comment_id in seen_comments:
+                        continue
+                    seen_comments.add(comment_id)
+                    comments.append(item)
+                cursor = result.get("nextCursor")
+                if not cursor or not page_items:
+                    break
+        return comments, warnings
 
     def fetch_image_comment_count(self, image_id: int) -> int:
         query = {"entityId": int(image_id), "entityType": "image", "hidden": False}

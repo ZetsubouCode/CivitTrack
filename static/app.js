@@ -47,6 +47,7 @@ const state = {
     frame: null,
   },
   userLookupResult: null,
+  userBlockExclusions: [],
   commentReactionAnalysis: null,
   commentReactionHistory: [],
   myCommentAnchors: [],
@@ -763,11 +764,11 @@ async function runImageSync(event) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        pages_per_version: 1,
+        pages_per_version: 5,
         with_meta: false,
         model_id: $("#imageModelFilter").value || null,
         model_version_id: $("#imageVersionFilter").value || null,
-        max_versions: 12,
+        max_versions: 1000,
       }),
     });
     await Promise.all([loadImageStatus(), loadLogs()]);
@@ -1401,6 +1402,11 @@ async function showSnapshotQuality(event) {
       ["Quality status", qualityBadge(quality.quality_status)],
       ["REST models fetched", fmt(quality.rest_model_count)],
       ["API pages fetched", fmt(quality.api_page_count)],
+      ...(quality.creator_model_count !== undefined ? [["Creator models listed", fmt(quality.creator_model_count)]] : []),
+      ...(quality.known_model_count !== undefined ? [["Known models checked", fmt(quality.known_model_count)]] : []),
+      ...(quality.known_model_recovery_count !== undefined ? [["Known models recovered", fmt(quality.known_model_recovery_count)]] : []),
+      ...(quality.model_detail_api_count !== undefined ? [["Extra details from REST", fmt(quality.model_detail_api_count)]] : []),
+      ...(quality.model_detail_trpc_count !== undefined ? [["Extra details from tRPC", fmt(quality.model_detail_trpc_count)]] : []),
       ["Minor-model discovery", esc(quality.minor_discovery_status || "Unavailable")],
       ["Extra minor models discovered", fmt(quality.minor_model_count)],
       ["Collection metrics", esc(quality.collection_metric_status || "Unavailable")],
@@ -1760,14 +1766,109 @@ const userLookupSource = (value) => ({
   model_article: "Stored articles",
   buzz_transaction: "Buzz activity",
   blocked_user_preference: "Blocked users",
+  "leaderboard:guardian": "Guardian leaderboard",
+  "leaderboard:knights-new-order": "Knights leaderboard",
   unavailable: "Unavailable",
 }[value] || value || "Unknown");
+
+const userExclusionIds = () => new Set((state.userBlockExclusions || []).map((row) => Number(row.user_id)));
+const userIsExcluded = (userId) => userExclusionIds().has(Number(userId));
+
+function syncUserExcludedState(ids, excluded) {
+  const targetIds = new Set(ids.map(Number));
+  if (state.userLookupResult?.users) {
+    state.userLookupResult.users = state.userLookupResult.users.map((user) => (
+      targetIds.has(Number(user.user_id)) ? { ...user, excluded } : user
+    ));
+  }
+  if (state.commentReactionAnalysis?.reaction_users) {
+    state.commentReactionAnalysis.reaction_users = state.commentReactionAnalysis.reaction_users.map((user) => (
+      targetIds.has(Number(user.user_id)) ? { ...user, excluded } : user
+    ));
+  }
+}
+
+function updateUserSelectionSummary() {
+  const visible = $$("[data-user-block-select]:not(:disabled)");
+  const selected = $$("[data-user-block-select]:checked");
+  const disabled = $$("[data-user-block-select]:disabled");
+  const blocked = disabled.filter((input) => input.dataset.blockDisabledReason === "blocked").length;
+  const protectedCount = disabled.filter((input) => input.dataset.blockDisabledReason === "protected").length;
+  const summary = $("#userSelectedSummary");
+  const hasRows = visible.length > 0 || disabled.length > 0;
+  if (summary) {
+    summary.textContent = hasRows
+      ? `${fmt(selected.length)} of ${fmt(visible.length)} blockable user${visible.length === 1 ? "" : "s"} selected${blocked ? `; ${fmt(blocked)} already blocked` : ""}${protectedCount ? `; ${fmt(protectedCount)} protected` : ""}.`
+      : "No users selected.";
+  }
+  $("#selectAllUsers").disabled = visible.length < 1;
+  $("#clearUserSelection").disabled = visible.length < 1;
+  $("#blockSelectedUsers").disabled = selected.length < 1;
+}
+
+function renderUserBlockExclusions() {
+  const rows = state.userBlockExclusions || [];
+  const summary = $("#userExclusionSummary");
+  if (summary) {
+    summary.textContent = rows.length
+      ? `${fmt(rows.length)} protected user${rows.length === 1 ? "" : "s"} will be skipped by batch blocking.`
+      : "No protected users yet.";
+  }
+  const body = $("#userExclusionRows");
+  if (!body) return;
+  body.innerHTML = rows.length ? rows.map((row) => `
+    <tr>
+      <td><strong>${fmt(row.user_id)}</strong></td>
+      <td>${row.username ? esc(row.username) : "<span class=\"ct-help\">Unknown</span>"}</td>
+      <td>${esc(dateFmt(row.created_at))}</td>
+      <td>
+        <button class="btn ct-btn-quiet" type="button" data-exclusion-remove="${esc(row.user_id)}">
+          <i class="bi bi-shield-x"></i> Remove
+        </button>
+      </td>
+    </tr>`).join("") : `<tr><td colspan="4" class="ct-table-empty">Add user IDs here or protect users from lookup and reaction rows.</td></tr>`;
+}
+
+async function loadUserBlockExclusions() {
+  const result = await api("/api/users/block-exclusions");
+  state.userBlockExclusions = result.exclusions || [];
+  renderUserBlockExclusions();
+}
+
+async function addUserBlockExclusions(ids, users = []) {
+  const result = await api("/api/users/block-exclusions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_ids: ids, users }),
+  });
+  await loadUserBlockExclusions();
+  syncUserExcludedState(result.added_ids || ids, true);
+  if (state.userLookupResult) renderUserLookupResults(state.userLookupResult);
+  renderCommentReactionAnalysis();
+  return result;
+}
+
+async function removeUserBlockExclusions(ids) {
+  const result = await api("/api/users/block-exclusions", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_ids: ids }),
+  });
+  await loadUserBlockExclusions();
+  syncUserExcludedState(result.removed_ids || ids, false);
+  if (state.userLookupResult) renderUserLookupResults(state.userLookupResult);
+  renderCommentReactionAnalysis();
+  return result;
+}
 
 function renderUserLookupResults(result) {
   state.userLookupResult = result || null;
   const rows = result?.users || [];
+  const blockedCount = rows.filter((row) => row.blocked).length;
+  const excludedCount = rows.filter((row) => row.excluded || userIsExcluded(row.user_id)).length;
+  const blockableCount = rows.filter((row) => !row.blocked && !(row.excluded || userIsExcluded(row.user_id))).length;
   $("#userResultSummary").textContent = rows.length
-    ? `${fmt(result.found_count || 0)} of ${fmt(rows.length)} user ID${rows.length === 1 ? "" : "s"} resolved.`
+    ? `${fmt(result.found_count || 0)} of ${fmt(rows.length)} user ID${rows.length === 1 ? "" : "s"} resolved; ${fmt(blockableCount)} blockable${blockedCount ? `, ${fmt(blockedCount)} already blocked` : ""}${excludedCount ? `, ${fmt(excludedCount)} protected` : ""}.`
     : "No lookup run yet.";
   $("#userLookupPill").className = `ct-pill ${result?.remote_error ? "ct-pill-warning" : "ct-pill-success"}`;
   $("#userLookupPill").textContent = result?.remote_error ? "Partial" : "Done";
@@ -1775,27 +1876,36 @@ function renderUserLookupResults(result) {
     ? `CivitAI lookup failed: ${result.remote_error}. Local fallback matches are still shown.`
     : result?.warnings?.length
     ? result.warnings.join(" ")
+    : result?.leaderboard_id
+    ? `Loaded top ${fmt(rows.length)} from ${result.leaderboard_title}. Already-blocked and protected users cannot be selected.`
     : "Batch lookup is limited to 100 IDs at a time.";
   if (!rows.length) {
-    $("#userRows").innerHTML = `<tr><td colspan="6" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr>`;
+    $("#userRows").innerHTML = `<tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr>`;
+    updateUserSelectionSummary();
     return;
   }
   $("#userRows").innerHTML = rows.map((row) => {
     const [label, badgeClass] = userLookupStatus(row.status);
     const followLabel = row.following ? "Unfollow" : "Follow";
     const blockLabel = row.blocked ? "Unblock" : "Block";
+    const excluded = row.excluded || userIsExcluded(row.user_id);
     const relationship = [
       row.following ? `<span class="ct-quality ct-quality-good">Following</span>` : "",
       row.blocked ? `<span class="ct-quality ct-quality-failed">Blocked</span>` : "",
+      excluded ? `<span class="ct-quality ct-quality-warning">Protected</span>` : "",
     ].filter(Boolean).join(" ");
     const profile = row.profile_url
       ? `<a href="${esc(row.profile_url)}" target="_blank" rel="noreferrer">Open profile</a>`
       : `<span class="ct-help">${esc(row.error || "Unavailable")}</span>`;
+    const leaderboardMeta = row.leaderboard_position
+      ? `<br><span class="ct-help">Rank #${fmt(row.leaderboard_position)}${row.leaderboard_score !== null && row.leaderboard_score !== undefined ? ` | Score ${fmt(row.leaderboard_score)}` : ""}</span>`
+      : "";
+    const disabledReason = row.blocked ? "blocked" : excluded ? "protected" : "";
     return `
       <tr>
         <td><strong>${fmt(row.user_id)}</strong></td>
         <td>${row.username ? esc(row.username) : "<span class=\"ct-help\">Unknown</span>"} ${relationship}</td>
-        <td><span class="ct-quality ${badgeClass}">${esc(label)}</span></td>
+        <td><span class="ct-quality ${badgeClass}">${esc(label)}</span>${leaderboardMeta}</td>
         <td>${esc(userLookupSource(row.source))}</td>
         <td>${profile}</td>
         <td>
@@ -1806,10 +1916,17 @@ function renderUserLookupResults(result) {
             <button class="btn ${row.blocked ? "ct-btn-secondary" : "ct-btn-danger"}" type="button" data-user-action="${row.blocked ? "unblock" : "block"}" data-user-id="${esc(row.user_id)}">
               <i class="bi ${row.blocked ? "bi-person-check" : "bi-person-x"}"></i> ${blockLabel}
             </button>
+            <button class="btn ct-btn-secondary" type="button" data-user-action="${excluded ? "unprotect" : "protect"}" data-user-id="${esc(row.user_id)}">
+              <i class="bi ${excluded ? "bi-shield-x" : "bi-shield-check"}"></i> ${excluded ? "Remove Protect" : "Protect"}
+            </button>
           </div>
+        </td>
+        <td>
+          <label class="ct-check"><input type="checkbox" data-user-block-select="${esc(row.user_id)}" data-block-disabled-reason="${esc(disabledReason)}" ${disabledReason ? "disabled" : ""}> Block</label>
         </td>
       </tr>`;
   }).join("");
+  updateUserSelectionSummary();
 }
 
 async function resolveUsers(event) {
@@ -1849,7 +1966,72 @@ function clearUserLookup() {
   $("#userLookupPill").textContent = "Ready";
   $("#userLookupHelp").textContent = "Batch lookup is limited to 100 IDs at a time.";
   $("#userResultSummary").textContent = "No lookup run yet.";
-  $("#userRows").innerHTML = `<tr><td colspan="6" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr>`;
+  $("#userRows").innerHTML = `<tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr>`;
+  updateUserSelectionSummary();
+}
+
+async function loadLeaderboardUsers(event) {
+  event.preventDefault();
+  const leaderboardId = $("#leaderboardSelect").value;
+  const button = $("#loadLeaderboardUsers");
+  busy(button, true, "Loading...");
+  $("#leaderboardLookupPill").className = "ct-pill ct-pill-muted";
+  $("#leaderboardLookupPill").textContent = "Loading";
+  try {
+    const result = await api("/api/users/leaderboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ leaderboard_id: leaderboardId, limit: 1000 }),
+    });
+    $("#leaderboardLookupPill").className = `ct-pill ${result.warnings?.length ? "ct-pill-warning" : "ct-pill-success"}`;
+    $("#leaderboardLookupPill").textContent = result.warnings?.length ? "Partial" : "Done";
+    $("#leaderboardLookupHelp").textContent = result.warnings?.length
+      ? result.warnings.join(" ")
+      : `Loaded ${fmt(result.count)} ${result.leaderboard_title} account${result.count === 1 ? "" : "s"}; ${fmt(result.blockable_count)} are blockable.`;
+    renderUserLookupResults(result);
+    toast(`Loaded ${fmt(result.count)} leaderboard user${result.count === 1 ? "" : "s"}.`);
+  } catch (error) {
+    $("#leaderboardLookupPill").className = "ct-pill ct-pill-warning";
+    $("#leaderboardLookupPill").textContent = "Error";
+    toast(error.message, "error");
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function submitUserBlockExclusions(event) {
+  event.preventDefault();
+  const ids = $("#userExclusionInput").value.trim();
+  if (!ids) {
+    toast("Enter at least one CivitAI user ID to protect.", "warning");
+    return;
+  }
+  const button = $("#addUserExclusions");
+  busy(button, true, "Adding...");
+  try {
+    const result = await addUserBlockExclusions(ids);
+    $("#userExclusionInput").value = "";
+    toast(`Protected ${fmt(result.added_count)} user${result.added_count === 1 ? "" : "s"} from batch blocking.`);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function removeUserBlockExclusionFromTable(event) {
+  const button = event.target.closest("[data-exclusion-remove]");
+  if (!button) return;
+  const userId = Number(button.dataset.exclusionRemove);
+  if (!confirm(`Remove user ${userId} from the batch-block exclusion list?`)) return;
+  busy(button, true, "Removing...");
+  try {
+    await removeUserBlockExclusions([userId]);
+    toast(`Removed user ${userId} from the exclusion list.`);
+  } catch (error) {
+    toast(error.message, "error");
+    busy(button, false);
+  }
 }
 
 async function runUserAction(event) {
@@ -1859,6 +2041,25 @@ async function runUserAction(event) {
   const action = button.dataset.userAction;
   const row = state.userLookupResult?.users?.find((item) => Number(item.user_id) === userId);
   const name = row?.username ? `${row.username} (${userId})` : `user ${userId}`;
+  if (action === "protect" || action === "unprotect") {
+    if (action === "unprotect" && !confirm(`Remove ${name} from the batch-block exclusion list?`)) {
+      return;
+    }
+    busy(button, true, action === "protect" ? "Protecting..." : "Removing...");
+    try {
+      if (action === "protect") {
+        await addUserBlockExclusions([userId], [{ user_id: userId, username: row?.username }]);
+        toast(`Protected ${row?.username || `user ${userId}`} from batch blocking.`);
+      } else {
+        await removeUserBlockExclusions([userId]);
+        toast(`Removed ${row?.username || `user ${userId}`} from the exclusion list.`);
+      }
+    } catch (error) {
+      toast(error.message, "error");
+      busy(button, false);
+    }
+    return;
+  }
   if (action === "block" && !confirm(`Block ${name}? CivitAI says blocked users will not see your content, and you will not see theirs.`)) {
     return;
   }
@@ -1873,7 +2074,7 @@ async function runUserAction(event) {
       body: JSON.stringify({ user_id: userId, action }),
     });
     if (state.userLookupResult?.users) {
-      state.userLookupResult.users = state.userLookupResult.users.map((item) => Number(item.user_id) === userId ? result.user : item);
+      state.userLookupResult.users = state.userLookupResult.users.map((item) => Number(item.user_id) === userId ? { ...item, ...result.user } : item);
       state.userLookupResult.found_count = state.userLookupResult.users.filter((item) => item.username).length;
       renderUserLookupResults(state.userLookupResult);
     } else {
@@ -1884,6 +2085,47 @@ async function runUserAction(event) {
   } catch (error) {
     toast(error.message, "error");
     busy(button, false);
+  }
+}
+
+async function blockSelectedUsers(event) {
+  const ids = $$("[data-user-block-select]:checked").map((input) => Number(input.dataset.userBlockSelect)).filter(Boolean);
+  if (!ids.length) {
+    toast("Select at least one blockable user.", "warning");
+    return;
+  }
+  if (!confirm(`Block ${ids.length} selected user${ids.length === 1 ? "" : "s"}? Already-blocked and protected users are skipped again on the server before the request is sent to CivitAI.`)) {
+    return;
+  }
+  const button = event.currentTarget;
+  busy(button, true, "Blocking...");
+  try {
+    const result = await api("/api/users/block-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_ids: ids }),
+    });
+    const blockedIds = new Set(result.blocked_ids || []);
+    const skippedBlockedIds = new Set(result.skipped_blocked_ids || []);
+    const skippedExcludedIds = new Set(result.skipped_excluded_ids || []);
+    if (state.userLookupResult?.users) {
+      state.userLookupResult.users = state.userLookupResult.users.map((user) => {
+        const userId = Number(user.user_id);
+        if (blockedIds.has(userId) || skippedBlockedIds.has(userId)) return { ...user, blocked: true };
+        if (skippedExcludedIds.has(userId)) return { ...user, excluded: true };
+        return user;
+      });
+      renderUserLookupResults(state.userLookupResult);
+    }
+    const failed = result.failed_count || 0;
+    const skippedBlocked = result.skipped_blocked_count || 0;
+    const skippedProtected = result.skipped_excluded_count || 0;
+    toast(`Blocked ${fmt(result.blocked_count)} user${result.blocked_count === 1 ? "" : "s"}${skippedBlocked ? `; ${fmt(skippedBlocked)} already blocked skipped` : ""}${skippedProtected ? `; ${fmt(skippedProtected)} protected skipped` : ""}${failed ? `; ${fmt(failed)} failed` : ""}.`, failed || skippedBlocked || skippedProtected ? "warning" : "info");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    busy(button, false);
+    updateUserSelectionSummary();
   }
 }
 
@@ -2008,17 +2250,20 @@ function reactionEventSummary(user) {
 }
 
 function updateCommentSelectionSummary() {
-  const visible = $$("[data-comment-block-user]");
+  const visible = $$("[data-comment-block-user]:not(:disabled)");
   const selected = $$("[data-comment-block-user]:checked");
+  const disabled = $$("[data-comment-block-user]:disabled");
+  const blocked = disabled.filter((input) => input.dataset.blockDisabledReason === "blocked").length;
+  const protectedCount = disabled.filter((input) => input.dataset.blockDisabledReason === "protected").length;
   const summary = $("#commentSelectedSummary");
-  const hasRows = visible.length > 0;
+  const hasRows = visible.length > 0 || disabled.length > 0;
   if (summary) {
     summary.textContent = hasRows
-      ? `${fmt(selected.length)} of ${fmt(visible.length)} matching user${visible.length === 1 ? "" : "s"} selected for blocking.`
+      ? `${fmt(selected.length)} of ${fmt(visible.length)} blockable user${visible.length === 1 ? "" : "s"} selected${blocked ? `; ${fmt(blocked)} already blocked` : ""}${protectedCount ? `; ${fmt(protectedCount)} protected` : ""}.`
       : "No users selected.";
   }
-  $("#selectAllReactionUsers").disabled = !hasRows;
-  $("#clearReactionUserSelection").disabled = !hasRows;
+  $("#selectAllReactionUsers").disabled = visible.length < 1;
+  $("#clearReactionUserSelection").disabled = visible.length < 1;
   $("#blockSelectedReactionUsers").disabled = selected.length < 1;
 }
 
@@ -2041,12 +2286,15 @@ function renderCommentReactionAnalysis() {
     return;
   }
   $("#commentReactionRows").innerHTML = matches.map((user) => {
+    const excluded = user.excluded || userIsExcluded(user.user_id);
+    const disabledReason = user.blocked ? "blocked" : excluded ? "protected" : "";
     const profile = user.profile_url
       ? `<a href="${esc(user.profile_url)}" target="_blank" rel="noreferrer">Open profile</a>`
       : `<span class="ct-help">Unavailable</span>`;
     const status = [
       user.blocked ? `<span class="ct-quality ct-quality-failed">Blocked</span>` : "",
       user.following ? `<span class="ct-quality ct-quality-good">Following</span>` : "",
+      excluded ? `<span class="ct-quality ct-quality-warning">Protected</span>` : "",
       user.is_comment_author ? `<span class="ct-quality ct-quality-warning">Author</span>` : "",
     ].filter(Boolean).join(" ") || `<span class="ct-quality ct-quality-unavailable">Not blocked</span>`;
     return `
@@ -2056,7 +2304,15 @@ function renderCommentReactionAnalysis() {
         <td>${esc(reactionEventSummary(user))}</td>
         <td>${status}</td>
         <td>${profile}</td>
-        <td><label class="ct-check"><input type="checkbox" data-comment-block-user="${esc(user.user_id)}" checked> Block</label></td>
+        <td>
+          <div class="ct-user-actions">
+            <label class="ct-check"><input type="checkbox" data-comment-block-user="${esc(user.user_id)}" data-block-disabled-reason="${esc(disabledReason)}" ${disabledReason ? "disabled" : "checked"}> Block</label>
+            ${user.blocked ? `<button class="btn ct-btn-secondary" type="button" data-comment-user-action="unblock" data-user-id="${esc(user.user_id)}"><i class="bi bi-person-check"></i> Unblock</button>` : ""}
+            <button class="btn ct-btn-secondary" type="button" data-comment-user-action="${excluded ? "unprotect" : "protect"}" data-user-id="${esc(user.user_id)}">
+              <i class="bi ${excluded ? "bi-shield-x" : "bi-shield-check"}"></i> ${excluded ? "Remove Protect" : "Protect"}
+            </button>
+          </div>
+        </td>
       </tr>`;
   }).join("");
   updateCommentSelectionSummary();
@@ -2116,17 +2372,65 @@ async function blockSelectedReactionUsers(event) {
       body: JSON.stringify({ user_ids: ids }),
     });
     const blockedIds = new Set(result.blocked_ids || []);
+    const skippedBlockedIds = new Set(result.skipped_blocked_ids || []);
+    const skippedExcludedIds = new Set(result.skipped_excluded_ids || []);
     if (state.commentReactionAnalysis?.reaction_users) {
-      state.commentReactionAnalysis.reaction_users = state.commentReactionAnalysis.reaction_users.map((user) => blockedIds.has(Number(user.user_id)) ? { ...user, blocked: true } : user);
+      state.commentReactionAnalysis.reaction_users = state.commentReactionAnalysis.reaction_users.map((user) => {
+        const userId = Number(user.user_id);
+        if (blockedIds.has(userId) || skippedBlockedIds.has(userId)) return { ...user, blocked: true };
+        if (skippedExcludedIds.has(userId)) return { ...user, excluded: true };
+        return user;
+      });
       renderCommentReactionAnalysis();
     }
     const failed = result.failed_count || 0;
-    toast(`Blocked ${fmt(result.blocked_count)} user${result.blocked_count === 1 ? "" : "s"}${failed ? `; ${fmt(failed)} failed` : ""}.`, failed ? "warning" : "info");
+    const skipped = result.skipped_excluded_count || 0;
+    const skippedBlocked = result.skipped_blocked_count || 0;
+    toast(`Blocked ${fmt(result.blocked_count)} user${result.blocked_count === 1 ? "" : "s"}${skippedBlocked ? `; ${fmt(skippedBlocked)} already blocked skipped` : ""}${skipped ? `; ${fmt(skipped)} protected skipped` : ""}${failed ? `; ${fmt(failed)} failed` : ""}.`, failed || skipped || skippedBlocked ? "warning" : "info");
   } catch (error) {
     toast(error.message, "error");
   } finally {
     busy(button, false);
     updateCommentSelectionSummary();
+  }
+}
+
+async function runCommentUserAction(event) {
+  const button = event.target.closest("[data-comment-user-action]");
+  if (!button) return;
+  const userId = Number(button.dataset.userId);
+  const action = button.dataset.commentUserAction;
+  const user = state.commentReactionAnalysis?.reaction_users?.find((item) => Number(item.user_id) === userId);
+  const name = user?.username ? `${user.username} (${userId})` : `user ${userId}`;
+  if (action === "unblock" && !confirm(`Unblock ${name}? Their content may show in your feed again.`)) return;
+  if (action === "unprotect" && !confirm(`Remove ${name} from the batch-block exclusion list?`)) return;
+  busy(button, true, action === "unblock" ? "Unblocking..." : action === "protect" ? "Protecting..." : "Removing...");
+  try {
+    if (action === "unblock") {
+      const result = await api("/api/users/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, action: "unblock" }),
+      });
+      if (state.commentReactionAnalysis?.reaction_users) {
+        state.commentReactionAnalysis.reaction_users = state.commentReactionAnalysis.reaction_users.map((item) => (
+          Number(item.user_id) === userId ? { ...item, ...result.user } : item
+        ));
+      }
+      renderCommentReactionAnalysis();
+      toast(`Unblocked ${result.user.username || `user ${userId}`}.`);
+      return;
+    }
+    if (action === "protect") {
+      await addUserBlockExclusions([userId], [{ user_id: userId, username: user?.username }]);
+      toast(`Protected ${user?.username || `user ${userId}`} from batch blocking.`);
+    } else if (action === "unprotect") {
+      await removeUserBlockExclusions([userId]);
+      toast(`Removed ${user?.username || `user ${userId}`} from the exclusion list.`);
+    }
+  } catch (error) {
+    toast(error.message, "error");
+    busy(button, false);
   }
 }
 
@@ -2156,6 +2460,21 @@ $("#userLookupForm").addEventListener("submit", resolveUsers);
 $("#resolveUsersHero").addEventListener("click", () => $("#userLookupForm").requestSubmit());
 $("#clearUserLookup").addEventListener("click", clearUserLookup);
 $("#userRows").addEventListener("click", runUserAction);
+$("#userRows").addEventListener("change", (event) => {
+  if (event.target.matches("[data-user-block-select]")) updateUserSelectionSummary();
+});
+$("#leaderboardLookupForm").addEventListener("submit", loadLeaderboardUsers);
+$("#selectAllUsers").addEventListener("click", () => {
+  $$("[data-user-block-select]:not(:disabled)").forEach((input) => { input.checked = true; });
+  updateUserSelectionSummary();
+});
+$("#clearUserSelection").addEventListener("click", () => {
+  $$("[data-user-block-select]:not(:disabled)").forEach((input) => { input.checked = false; });
+  updateUserSelectionSummary();
+});
+$("#blockSelectedUsers").addEventListener("click", blockSelectedUsers);
+$("#userExclusionForm").addEventListener("submit", submitUserBlockExclusions);
+$("#userExclusionRows").addEventListener("click", removeUserBlockExclusionFromTable);
 $("#commentReactionForm").addEventListener("submit", analyzeCommentReactions);
 $("#commentHistorySelect").addEventListener("change", (event) => {
   setCommentAnchorFromSelect(event.target, "Saved scan");
@@ -2184,12 +2503,13 @@ $("#commentHideBlocked").addEventListener("change", renderCommentReactionAnalysi
 $("#commentReactionRows").addEventListener("change", (event) => {
   if (event.target.matches("[data-comment-block-user]")) updateCommentSelectionSummary();
 });
+$("#commentReactionRows").addEventListener("click", runCommentUserAction);
 $("#selectAllReactionUsers").addEventListener("click", () => {
-  $$("[data-comment-block-user]").forEach((input) => { input.checked = true; });
+  $$("[data-comment-block-user]:not(:disabled)").forEach((input) => { input.checked = true; });
   updateCommentSelectionSummary();
 });
 $("#clearReactionUserSelection").addEventListener("click", () => {
-  $$("[data-comment-block-user]").forEach((input) => { input.checked = false; });
+  $$("[data-comment-block-user]:not(:disabled)").forEach((input) => { input.checked = false; });
   updateCommentSelectionSummary();
 });
 $("#blockSelectedReactionUsers").addEventListener("click", blockSelectedReactionUsers);
@@ -2323,5 +2643,6 @@ function viewFromHash() {
 
 window.addEventListener("hashchange", () => setView(viewFromHash(), false));
 setView(viewFromHash(), false);
+loadUserBlockExclusions().catch((error) => toast(error.message, "error"));
 loadCommentReactionHistory();
 refresh().catch((error) => toast(error.message, "error"));

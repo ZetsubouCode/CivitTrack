@@ -24,7 +24,7 @@ OPTIONAL_METRICS = {"collected_count", "generation_count"}
 def list_snapshots(username: str | None = None) -> list[dict]:
     username = username or get_config().username
     with create_connection() as connection:
-        return dict_rows(
+        rows = dict_rows(
             connection.execute(
                 "SELECT s.id, s.checked_at, s.source, s.model_type_filter, s.raw_total_item, "
                 "s.note_type, s.note, q.quality_status, q.warning_count, "
@@ -37,6 +37,25 @@ def list_snapshots(username: str | None = None) -> list[dict]:
                 (username,),
             )
         )
+        _fill_known_collection_totals(connection, rows)
+        return rows
+
+
+def _known_collection_total(connection, snapshot_id: int) -> int | None:
+    row = connection.execute(
+        "SELECT COUNT(collected_count) AS known_count, SUM(collected_count) AS known_sum "
+        "FROM model_snapshot WHERE snapshot_id = ?",
+        (snapshot_id,),
+    ).fetchone()
+    if not row or not row["known_count"]:
+        return None
+    return int(row["known_sum"] or 0)
+
+
+def _fill_known_collection_totals(connection, snapshots: list[dict]) -> None:
+    for snapshot in snapshots:
+        if snapshot.get("total_collected_count") is None:
+            snapshot["total_collected_count"] = _known_collection_total(connection, snapshot["id"])
 
 
 def get_latest_breakdown(username: str | None = None) -> dict:
@@ -70,7 +89,10 @@ def _load_snapshot(connection, snapshot_id: int) -> dict | None:
         "JOIN account_snapshot a ON a.snapshot_id = s.id WHERE s.id = ? AND s.api_ok = 1",
         (snapshot_id,),
     ).fetchone()
-    return dict(row) if row else None
+    snapshot = dict(row) if row else None
+    if snapshot and snapshot.get("total_collected_count") is None:
+        snapshot["total_collected_count"] = _known_collection_total(connection, snapshot_id)
+    return snapshot
 
 
 def _last_download_observed_at(connection, username: str, snapshot_id: int) -> dict[int, str]:

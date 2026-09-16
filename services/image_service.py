@@ -14,9 +14,9 @@ from .db import create_connection, dict_rows, insert_sync_log, transaction, utc_
 
 
 IMAGE_SYNC_DEFAULT_PAGES = 1
-IMAGE_SYNC_MAX_PAGES = 5
-IMAGE_SYNC_DEFAULT_MAX_VERSIONS = 12
-IMAGE_SYNC_MAX_VERSIONS = 200
+IMAGE_SYNC_MAX_PAGES = 25
+IMAGE_SYNC_DEFAULT_MAX_VERSIONS = 1000
+IMAGE_SYNC_MAX_VERSIONS = 2000
 IMAGE_PAGE_LIMIT = 100
 IMAGE_LIST_LIMIT = 80
 IMAGE_LIST_MAX_LIMIT = 240
@@ -211,6 +211,86 @@ def _latest_snapshot_versions(
     )
 
 
+def _latest_snapshot_models(
+    connection,
+    username: str,
+    model_id: int | None = None,
+    model_version_id: int | None = None,
+    max_models: int = IMAGE_SYNC_DEFAULT_MAX_VERSIONS,
+) -> list[dict]:
+    snapshot = connection.execute(
+        "SELECT id FROM snapshot WHERE username = ? AND api_ok = 1 "
+        "ORDER BY checked_at DESC, id DESC LIMIT 1",
+        (username,),
+    ).fetchone()
+    if not snapshot:
+        return []
+    clauses = ["m.snapshot_id = ?"]
+    values = [snapshot["id"]]
+    join = ""
+    if model_id:
+        clauses.append("m.model_id = ?")
+        values.append(model_id)
+    if model_version_id:
+        join = "JOIN model_version_snapshot v ON v.snapshot_id = m.snapshot_id AND v.model_id = m.model_id "
+        clauses.append("v.model_version_id = ?")
+        values.append(model_version_id)
+    return dict_rows(
+        connection.execute(
+            "SELECT DISTINCT m.model_id, m.model_name, m.latest_version_id AS model_version_id, "
+            "m.latest_version_name AS version_name, m.base_model "
+            f"FROM model_snapshot m {join}WHERE {' AND '.join(clauses)} "
+            "ORDER BY COALESCE(m.published_at, '') DESC, m.model_id DESC LIMIT ?",
+            (*values, max_models),
+        )
+    )
+
+
+def _versions_by_model(versions: list[dict]) -> dict[int, dict[int, dict]]:
+    grouped: dict[int, dict[int, dict]] = {}
+    for version in versions:
+        model_id = _safe_optional_int(version.get("model_id"))
+        version_id = _safe_optional_int(version.get("model_version_id"))
+        if not model_id or not version_id:
+            continue
+        grouped.setdefault(model_id, {})[version_id] = version
+    return grouped
+
+
+def _image_version_context(image: dict, model: dict, versions: dict[int, dict]) -> dict:
+    candidates = []
+    image_version_id = _safe_optional_int(image.get("modelVersionId"))
+    if image_version_id:
+        candidates.append(image_version_id)
+    for value in image.get("modelVersionIds") or []:
+        parsed = _safe_optional_int(value)
+        if parsed:
+            candidates.append(parsed)
+    for version_id in candidates:
+        if version_id in versions:
+            return versions[version_id]
+    fallback_version_id = _safe_optional_int(model.get("model_version_id"))
+    return {
+        "model_id": model.get("model_id"),
+        "model_name": model.get("model_name"),
+        "model_version_id": fallback_version_id or (candidates[0] if candidates else None),
+        "version_name": model.get("version_name"),
+        "base_model": model.get("base_model"),
+    }
+
+
+def _civitai_image_url(value) -> str | None:
+    url = _http_url(value)
+    if url:
+        return url
+    text = _clean_text(value)
+    if not text:
+        return None
+    if len(text) >= 20 and all(char.isalnum() or char == "-" for char in text):
+        return f"https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/{text}/width=450"
+    return None
+
+
 def _normalize_image(
     image: dict,
     version: dict,
@@ -223,7 +303,8 @@ def _normalize_image(
     model_version_id = _safe_optional_int(version.get("model_version_id"))
     if not image_id or not model_id or not model_version_id:
         return None
-    stats = image.get("stats") or {}
+    stats = image.get("stats") if isinstance(image.get("stats"), dict) else image
+    user = image.get("user") if isinstance(image.get("user"), dict) else {}
     return {
         "image_id": image_id,
         "post_id": _safe_optional_int(image.get("postId")),
@@ -232,16 +313,16 @@ def _normalize_image(
         "model_version_id": model_version_id,
         "version_name": _clean_text(version.get("version_name")),
         "base_model": _clean_text(image.get("baseModel"), _clean_text(version.get("base_model"))),
-        "image_url": _http_url(image.get("url")),
+        "image_url": _civitai_image_url(image.get("url")),
         "image_page_url": f"{base_url.rstrip('/')}/images/{image_id}",
-        "creator_user_id": _safe_optional_int(image.get("userId") or (image.get("user") or {}).get("id")),
+        "creator_user_id": _safe_optional_int(image.get("userId") or user.get("id")),
         "width": _safe_optional_int(image.get("width")),
         "height": _safe_optional_int(image.get("height")),
         "nsfw_level": _clean_text(image.get("nsfwLevel")),
         "nsfw": int(bool(image.get("nsfw"))),
         "image_type": _clean_text(image.get("type")),
-        "published_at": _clean_text(image.get("createdAt")),
-        "username": _clean_text(image.get("username")),
+        "published_at": _clean_text(image.get("publishedAt"), _clean_text(image.get("createdAt"))),
+        "username": _clean_text(image.get("username"), _clean_text(user.get("username"))),
         "cry_count": _safe_int(stats.get("cryCount")),
         "laugh_count": _safe_int(stats.get("laughCount")),
         "like_count": _safe_int(stats.get("likeCount")),
@@ -599,7 +680,14 @@ def run_image_sync(
             model_version_id=model_version_id,
             max_versions=max_versions,
         )
-    if not versions:
+        models = _latest_snapshot_models(
+            connection,
+            config.username,
+            model_id=model_id,
+            model_version_id=model_version_id,
+            max_models=max_versions,
+        )
+    if not versions and not models:
         return _record_failed_sync("Take a model snapshot before syncing public images.", source)
 
     checked_at = utc_now()
@@ -607,42 +695,70 @@ def run_image_sync(
     warnings: list[str] = []
     info: list[str] = []
     normalized_rows: list[dict] = []
+    version_lookup = _versions_by_model(versions)
+    sync_targets = versions if model_version_id else models
     with transaction() as connection:
         cursor = connection.execute(
             "INSERT INTO image_sync "
             "(checked_at, username, source, api_ok, version_count, image_count, new_image_count, "
             "warning_count, warnings_json, info_json, created_at) "
             "VALUES (?, ?, ?, 1, ?, 0, 0, 0, '[]', '[]', ?)",
-            (checked_at, config.username, source, len(versions), checked_at),
+            (checked_at, config.username, source, len(sync_targets), checked_at),
         )
         sync_id = cursor.lastrowid
 
-    for version in versions:
-        version_id = _safe_optional_int(version.get("model_version_id"))
-        if not version_id:
-            continue
-        try:
-            images, fetched_pages = client.fetch_model_version_images(
-                version_id,
-                pages=pages_per_version,
-                limit=IMAGE_PAGE_LIMIT,
-                with_meta=with_meta,
+    if model_version_id:
+        for version in versions:
+            version_id = _safe_optional_int(version.get("model_version_id"))
+            if not version_id:
+                continue
+            try:
+                images, fetched_pages = client.fetch_model_version_images(
+                    version_id,
+                    pages=pages_per_version,
+                    limit=IMAGE_PAGE_LIMIT,
+                    with_meta=with_meta,
+                )
+            except CivitaiError as exc:
+                warnings.append(
+                    f"Images unavailable for {version.get('model_name')} / "
+                    f"{version.get('version_name') or version_id}: {exc}"
+                )
+                continue
+            info.append(
+                f"Fetched {len(images)} public images for {version.get('model_name')} / "
+                f"{version.get('version_name') or version_id} across {fetched_pages} page"
+                f"{'' if fetched_pages == 1 else 's'}."
             )
-        except CivitaiError as exc:
-            warnings.append(
-                f"Images unavailable for {version.get('model_name')} / "
-                f"{version.get('version_name') or version_id}: {exc}"
+            for image in images:
+                row = _normalize_image(image, version, sync_id, checked_at, config.base_url)
+                if row:
+                    normalized_rows.append(row)
+    else:
+        for model in models:
+            current_model_id = _safe_optional_int(model.get("model_id"))
+            if not current_model_id:
+                continue
+            try:
+                images, fetched_pages = client.fetch_model_images(
+                    current_model_id,
+                    pages=pages_per_version,
+                    limit=IMAGE_PAGE_LIMIT,
+                    with_meta=with_meta,
+                )
+            except CivitaiError as exc:
+                warnings.append(f"Images unavailable for {model.get('model_name')}: {exc}")
+                continue
+            info.append(
+                f"Fetched {len(images)} model-page images for {model.get('model_name')} "
+                f"across {fetched_pages} page{'' if fetched_pages == 1 else 's'}."
             )
-            continue
-        info.append(
-            f"Fetched {len(images)} public images for {version.get('model_name')} / "
-            f"{version.get('version_name') or version_id} across {fetched_pages} page"
-            f"{'' if fetched_pages == 1 else 's'}."
-        )
-        for image in images:
-            row = _normalize_image(image, version, sync_id, checked_at, config.base_url)
-            if row:
-                normalized_rows.append(row)
+            model_versions = version_lookup.get(current_model_id, {})
+            for image in images:
+                version = _image_version_context(image, model, model_versions)
+                row = _normalize_image(image, version, sync_id, checked_at, config.base_url)
+                if row:
+                    normalized_rows.append(row)
 
     with transaction() as connection:
         new_count = 0
@@ -708,7 +824,7 @@ def run_image_sync(
         "error": "",
         "image_sync_id": sync_id,
         "checked_at": checked_at,
-        "version_count": len(versions),
+        "version_count": len(sync_targets),
         "image_count": len(seen_image_ids),
         "new_image_count": new_count,
         "warnings": warnings,

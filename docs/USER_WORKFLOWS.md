@@ -15,6 +15,7 @@ deleted_at
 status
 source
 following
+follows_you
 blocked
 excluded
 ```
@@ -24,24 +25,23 @@ Additional workflow-specific fields can be attached, for example leaderboard pos
 Keep relationship field names directional and unambiguous:
 
 - `following`: the configured account follows the target user.
+- `follows_you`: the target user follows the configured account; `null` means unavailable rather than confirmed false.
 - `blocked`: the configured account blocks the target user.
 - `excluded`: local CivitTrack protection; the target should not be included in batch blocking.
 
-There is currently no `follows_you` field.
-
 ## User Resolver
 
-Current behavior accepts numeric CivitAI user IDs and resolves them through remote creator data with local stored username fallbacks.
+User Lookup accepts numeric CivitAI user IDs, usernames, `@username` values, or a mixed batch. Commas, semicolons, spaces, tabs, and line breaks are accepted separators. It resolves usernames through batched `userProfile.get` calls, falls back to case-insensitive local username matches, converts every successful username to a canonical numeric ID, and then reuses the numeric-ID resolver.
 
 The resolver also enriches rows with account relationship state when available.
 
-### Safe extension: username input
+### Username input safety
 
-The intended extension point for username lookup is the lookup workflow only.
+Username parsing applies only to the lookup workflow.
 
 Do not change `_parse_user_ids()` into a permissive ID-or-name parser because it is also used by ID-only actions such as batch blocking and protection-list changes.
 
-Recommended flow:
+Current flow:
 
 ```text
 raw lookup tokens
@@ -55,15 +55,17 @@ raw lookup tokens
 
 Mixed input should be supported without making one invalid username fail unrelated valid IDs/usernames.
 
+Final resolved rows are deduplicated by canonical numeric ID in first-input order. An unresolved username remains as a clear per-input result without action controls. `_parse_user_ids()` and ID-only protection/blocking operations remain strict.
+
 ## Resolved Users table
 
 The same result table is also reused by leaderboard loading. This matters for sorting.
 
-For normal direct lookup, relationship-priority sorting can be applied in the browser after the server returns normalized rows.
+For normal direct lookup, the browser applies a stable priority of Mutual, Follows You, other resolved users, then unresolved/not-found rows.
 
 For leaderboard results, preserve `leaderboard_position` ordering. Do not sort followers/protected/blocked users ahead of their actual leaderboard position.
 
-If reverse-follow state is added later, a sensible direct-lookup priority is:
+Direct-lookup priority is:
 
 1. Mutual (`following && follows_you`)
 2. Follows you (`follows_you`)
@@ -115,13 +117,15 @@ The comment-reaction workflow:
 
 Filtering should happen first. Priority sorting should apply only to the remaining visible matches.
 
-When reverse-follow state becomes available, recommended stable priority is:
+After the existing reaction/author/blocked filters run, the remaining rows use this stable priority:
 
 1. Mutual
 2. Follows you
 3. Other users
 
 Within the same priority group, preserve the existing stable order unless the UI explicitly exposes another sort.
+
+Checkbox selection is tracked independently of row order, so a filter change or relationship-priority rerender does not make blocked/protected users eligible or silently reset the current visible selection.
 
 Blocked/protected state should remain a separate badge/safety concept instead of being mixed into follower priority.
 
@@ -132,7 +136,7 @@ Recommended labels once reverse-follow state exists:
 | State | Meaning |
 | --- | --- |
 | `Following` | You follow this user |
-| `Follows You` | This user follows you |
+| `Follows You` | This user follows the configured account |
 | `Mutual` | Both directions are true |
 | `Blocked` | You block this user |
 | `Protected` | Local CivitTrack exclusion from batch blocking |

@@ -67,6 +67,39 @@ def _parse_user_ids(value, limit: int = MAX_USER_LOOKUP_IDS, action: str = "Look
     return ids
 
 
+def _parse_user_lookup_tokens(value, limit: int = MAX_USER_LOOKUP_IDS) -> list[dict]:
+    values = value if isinstance(value, (list, tuple)) else [value]
+    parts = []
+    for item in values:
+        if item is None or isinstance(item, (dict, list, tuple)):
+            continue
+        parts.extend(part for part in re.split(r"[,;\s]+", str(item).strip()) if part)
+    if not parts:
+        raise ValueError("Enter at least one CivitAI user ID or username.")
+    if len(parts) > limit:
+        raise ValueError(f"Lookup is limited to {limit} IDs or usernames at a time.")
+    tokens = []
+    invalid = []
+    for part in parts:
+        if re.fullmatch(r"[+-]?\d+", part):
+            user_id = _safe_optional_int(part)
+            if user_id is None or user_id <= 0:
+                invalid.append(part)
+                continue
+            tokens.append({"input": part, "input_type": "id", "user_id": user_id})
+            continue
+        username = part[1:] if part.startswith("@") else part
+        if not username:
+            invalid.append(part)
+            continue
+        tokens.append({"input": part, "input_type": "username", "username": username})
+    if invalid:
+        sample = ", ".join(invalid[:5])
+        suffix = "..." if len(invalid) > 5 else ""
+        raise ValueError(f"User IDs must be positive integers and usernames cannot be empty. Invalid value(s): {sample}{suffix}")
+    return tokens
+
+
 def _local_user_matches(user_ids: list[int]) -> dict[int, dict]:
     if not user_ids:
         return {}
@@ -108,6 +141,35 @@ def _local_user_matches(user_ids: list[int]) -> dict[int, dict]:
     return local
 
 
+def _local_user_matches_by_usernames(usernames: list[str]) -> dict[str, dict]:
+    keys = list(dict.fromkeys(username.casefold() for username in usernames if username))
+    if not keys:
+        return {}
+    placeholders = ", ".join("?" for _ in keys)
+    local: dict[str, dict] = {}
+    queries = (
+        ("model_image", "creator_user_id"),
+        ("model_article", "user_id"),
+        ("buzz_transaction", "user_id"),
+        ("blocked_user_preference", "user_id"),
+        ("user_block_exclusion", "user_id"),
+    )
+    with create_connection() as connection:
+        for table, id_column in queries:
+            sql = (
+                f"SELECT {id_column} AS user_id, username FROM {table} "
+                f"WHERE {id_column} IS NOT NULL AND username IS NOT NULL "
+                f"AND LOWER(username) IN ({placeholders})"
+            )
+            for row in connection.execute(sql, tuple(keys)):
+                user_id = _safe_optional_int(row["user_id"])
+                username = _clean_text(row["username"])
+                key = username.casefold() if username else ""
+                if user_id and key and key not in local:
+                    local[key] = {"user_id": user_id, "username": username, "source": table}
+    return local
+
+
 def _user_exclusions(user_ids: list[int] | None = None) -> dict[int, dict]:
     params: tuple = ()
     where = ""
@@ -132,23 +194,31 @@ def _profile_url(username: str | None) -> str | None:
     return f"{get_config().base_url}/user/{username}"
 
 
-def _lookup_account_state(client: CivitaiClient) -> tuple[set[int], set[int], list[str]]:
+def _lookup_account_state(client: CivitaiClient) -> tuple[set[int], set[int] | None, set[int], list[str]]:
     following: set[int] = set()
+    followers: set[int] | None = None
     blocked: set[int] = set()
     warnings = []
     config = get_config()
     if not config.api_key:
         warnings.append("API key is missing, so follow/block state is unavailable.")
-        return following, blocked, warnings
-    try:
-        following = set(client.fetch_following_user_ids())
-    except CivitaiError as exc:
-        warnings.append(f"Following state unavailable: {exc}")
-    try:
-        blocked = _fetch_blocked_user_ids(client)
-    except CivitaiError as exc:
-        warnings.append(f"Blocked-user state unavailable: {exc}")
-    return following, blocked, warnings
+    else:
+        try:
+            following = set(client.fetch_following_user_ids())
+        except CivitaiError as exc:
+            warnings.append(f"Following state unavailable: {exc}")
+        try:
+            blocked = _fetch_blocked_user_ids(client)
+        except CivitaiError as exc:
+            warnings.append(f"Blocked-user state unavailable: {exc}")
+    if not config.username:
+        warnings.append("Configured username is missing, so reverse-follow state is unavailable.")
+    else:
+        try:
+            followers = set(client.fetch_follower_user_ids(config.username))
+        except CivitaiError as exc:
+            warnings.append(f"Reverse-follow state unavailable: {exc}")
+    return following, followers, blocked, warnings
 
 
 def _fetch_blocked_user_ids(client: CivitaiClient) -> set[int]:
@@ -169,7 +239,7 @@ def _status_for_creator(username: str | None, deleted_at: str | None) -> str:
     return "found" if username else "found_without_username"
 
 
-def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int, dict], exclusions: dict[int, dict], following: set[int], blocked: set[int], remote_error: str) -> list[dict]:
+def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int, dict], exclusions: dict[int, dict], following: set[int], followers: set[int] | None, blocked: set[int], remote_error: str) -> list[dict]:
     rows = []
     for user_id in user_ids:
         excluded = user_id in exclusions
@@ -186,6 +256,7 @@ def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int,
                 "status": _status_for_creator(username, deleted_at),
                 "source": "civitai_trpc",
                 "following": user_id in following,
+                "follows_you": None if followers is None else user_id in followers,
                 "blocked": user_id in blocked,
                 "excluded": excluded,
             })
@@ -201,6 +272,7 @@ def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int,
                 "status": "local_only",
                 "source": match["source"],
                 "following": user_id in following,
+                "follows_you": None if followers is None else user_id in followers,
                 "blocked": user_id in blocked,
                 "excluded": excluded,
             })
@@ -215,6 +287,7 @@ def _resolve_rows(user_ids: list[int], remote: dict[int, dict], local: dict[int,
             "source": "civitai_trpc" if not remote_error else "unavailable",
             "error": remote_error,
             "following": user_id in following,
+            "follows_you": None if followers is None else user_id in followers,
             "blocked": user_id in blocked,
             "excluded": excluded,
         })
@@ -226,14 +299,14 @@ def resolve_users_by_ids(value) -> dict:
     local = _local_user_matches(user_ids)
     exclusions = _user_exclusions(user_ids)
     client = CivitaiClient()
-    following, blocked, state_warnings = _lookup_account_state(client)
+    following, followers, blocked, state_warnings = _lookup_account_state(client)
     remote: dict[int, dict] = {}
     remote_error = ""
     try:
         remote = client.fetch_creators_by_ids(user_ids)
     except CivitaiError as exc:
         remote_error = str(exc)
-    rows = _resolve_rows(user_ids, remote, local, exclusions, following, blocked, remote_error)
+    rows = _resolve_rows(user_ids, remote, local, exclusions, following, followers, blocked, remote_error)
     return {
         "ok": True,
         "ids": user_ids,
@@ -242,6 +315,108 @@ def resolve_users_by_ids(value) -> dict:
         "found_count": sum(1 for row in rows if row["username"]),
         "remote_error": remote_error,
         "warnings": state_warnings,
+    }
+
+
+def resolve_users(value) -> dict:
+    tokens = _parse_user_lookup_tokens(value)
+    usernames = list(dict.fromkeys(
+        token["username"] for token in tokens if token["input_type"] == "username"
+    ))
+    client = CivitaiClient()
+    profiles: dict[str, dict | None] = {}
+    warnings = []
+    try:
+        profiles = client.fetch_user_profiles(usernames)
+    except CivitaiError as exc:
+        warnings.append(f"Username lookup unavailable: {exc}")
+    unresolved_names = [
+        username for username in usernames
+        if not isinstance(profiles.get(username), dict)
+        or not _safe_optional_int(profiles[username].get("id"))
+    ]
+    local = _local_user_matches_by_usernames(unresolved_names)
+    token_user_ids: list[int | None] = []
+    canonical_ids = []
+    seen_ids = set()
+    for token in tokens:
+        if token["input_type"] == "id":
+            user_id = token["user_id"]
+        else:
+            profile = profiles.get(token["username"])
+            user_id = _safe_optional_int(profile.get("id")) if isinstance(profile, dict) else None
+            if not user_id:
+                user_id = _safe_optional_int((local.get(token["username"].casefold()) or {}).get("user_id"))
+        token_user_ids.append(user_id)
+        if user_id and user_id not in seen_ids:
+            canonical_ids.append(user_id)
+            seen_ids.add(user_id)
+
+    resolved = resolve_users_by_ids(canonical_ids) if canonical_ids else {
+        "users": [], "warnings": [], "remote_error": "",
+    }
+    warnings.extend(resolved.get("warnings", []))
+    row_by_id = {row["user_id"]: row for row in resolved.get("users", [])}
+    for profile in profiles.values():
+        if not isinstance(profile, dict):
+            continue
+        user_id = _safe_optional_int(profile.get("id"))
+        username = _clean_text(profile.get("username"))
+        row = row_by_id.get(user_id)
+        if not user_id or not username or not row or row.get("username"):
+            continue
+        deleted_at = _clean_text(profile.get("deletedAt"))
+        row_by_id[user_id] = {
+            **row,
+            "username": username,
+            "profile_url": _profile_url(username),
+            "image": _clean_text(profile.get("image")),
+            "deleted_at": deleted_at,
+            "status": _status_for_creator(username, deleted_at),
+            "source": "user_profile",
+            "error": "",
+        }
+    rows = []
+    emitted_ids = set()
+    emitted_unresolved = set()
+    for token, user_id in zip(tokens, token_user_ids):
+        if user_id:
+            if user_id in emitted_ids:
+                continue
+            emitted_ids.add(user_id)
+            row = row_by_id.get(user_id, {"user_id": user_id, "status": "not_found"})
+            rows.append({**row, "input": token["input"], "input_type": token["input_type"]})
+            continue
+        key = token["username"].casefold()
+        if key in emitted_unresolved:
+            continue
+        emitted_unresolved.add(key)
+        rows.append({
+            "user_id": None,
+            "username": None,
+            "profile_url": None,
+            "image": None,
+            "deleted_at": None,
+            "status": "unresolved",
+            "source": "username_lookup",
+            "error": f"Could not resolve @{token['username']} to a CivitAI user.",
+            "following": False,
+            "follows_you": None,
+            "blocked": False,
+            "excluded": False,
+            "input": token["input"],
+            "input_type": "username",
+        })
+    return {
+        "ok": True,
+        "ids": canonical_ids,
+        "users": rows,
+        "count": len(rows),
+        "input_count": len(tokens),
+        "found_count": sum(1 for row in rows if row.get("user_id") and row.get("username")),
+        "unresolved_count": sum(1 for row in rows if not row.get("user_id")),
+        "remote_error": resolved.get("remote_error", ""),
+        "warnings": warnings,
     }
 
 
@@ -257,7 +432,7 @@ def fetch_leaderboard_users(leaderboard_id, limit=MAX_LEADERBOARD_USERS) -> dict
     if not config.api_key:
         raise ValueError("CivitAI API key is missing. Add CIVITAI_API_KEY before loading leaderboards.")
     client = CivitaiClient(config)
-    following, blocked, warnings = _lookup_account_state(client)
+    following, followers, blocked, warnings = _lookup_account_state(client)
     rows = client.fetch_leaderboard(leaderboard_id, max_position=limit + 1)
     exclusions = _user_exclusions([
         user_id for user_id in (
@@ -284,6 +459,7 @@ def fetch_leaderboard_users(leaderboard_id, limit=MAX_LEADERBOARD_USERS) -> dict
             "status": _status_for_creator(username, deleted_at),
             "source": f"leaderboard:{leaderboard_id}",
             "following": user_id in following,
+            "follows_you": None if followers is None else user_id in followers,
             "blocked": user_id in blocked,
             "excluded": user_id in exclusions,
             "leaderboard_id": leaderboard_id,
@@ -502,6 +678,7 @@ def analyze_comment_reactions(comment_id) -> dict:
             "username": reaction_usernames.get(user_id),
             "profile_url": _profile_url(reaction_usernames.get(user_id)),
             "following": False,
+            "follows_you": None,
             "blocked": False,
             "excluded": user_id in exclusions,
             "status": "found" if reaction_usernames.get(user_id) else "unresolved",

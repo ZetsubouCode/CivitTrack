@@ -15,6 +15,9 @@ GENERATION_BATCH_SIZE = 20
 GENERATION_BATCH_DELAY_SECONDS = 0.15
 MODEL_DETAIL_BATCH_SIZE = 20
 MODEL_DETAIL_BATCH_DELAY_SECONDS = 0.15
+USER_PROFILE_BATCH_SIZE = 20
+FOLLOWER_PAGE_SIZE = 200
+MAX_FOLLOWER_PAGES = 50
 
 
 class CivitaiClient:
@@ -709,6 +712,46 @@ class CivitaiClient:
             if parsed is not None and parsed > 0
         ]
 
+    def fetch_follower_user_ids(self, username: str) -> list[int]:
+        def parse_page(result) -> tuple[list[int], int]:
+            if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+                raise CivitaiError("CivitAI returned an unexpected followers response.")
+            ids = [
+                parsed for parsed in (
+                    self._safe_optional_int(item.get("id"))
+                    for item in result["items"]
+                    if isinstance(item, dict)
+                )
+                if parsed is not None and parsed > 0
+            ]
+            total_pages = self._safe_optional_int(result.get("totalPages")) or 1
+            return ids, max(1, total_pages)
+
+        query = {
+            "username": str(username),
+            "type": "followers",
+            "limit": FOLLOWER_PAGE_SIZE,
+            "page": 1,
+        }
+        first = self.get_trpc_batch("user.getList", [query])[0]
+        follower_ids, total_pages = parse_page(first)
+        if total_pages > MAX_FOLLOWER_PAGES:
+            raise CivitaiError(
+                f"Follower list exceeds the supported {MAX_FOLLOWER_PAGES * FOLLOWER_PAGE_SIZE:,}-user limit."
+            )
+        for start in range(2, total_pages + 1, USER_PROFILE_BATCH_SIZE):
+            page_numbers = list(range(start, min(total_pages + 1, start + USER_PROFILE_BATCH_SIZE)))
+            pages = self.get_trpc_batch(
+                "user.getList",
+                [{**query, "page": page} for page in page_numbers],
+            )
+            if len(pages) != len(page_numbers):
+                raise CivitaiError("CivitAI returned an incomplete followers response.")
+            for page in pages:
+                page_ids, _ = parse_page(page)
+                follower_ids.extend(page_ids)
+        return list(dict.fromkeys(follower_ids))
+
     def fetch_leaderboard(self, leaderboard_id: str, max_position: int = 1001) -> list[dict]:
         result = self.post_trpc(
             "leaderboard.getLeaderboard",
@@ -732,6 +775,20 @@ class CivitaiClient:
     def fetch_user_profile(self, username: str) -> dict | None:
         result = self.get_trpc_batch("userProfile.get", [{"username": username}])[0]
         return result if isinstance(result, dict) else None
+
+    def fetch_user_profiles(self, usernames: list[str]) -> dict[str, dict | None]:
+        profiles: dict[str, dict | None] = {}
+        for start in range(0, len(usernames), USER_PROFILE_BATCH_SIZE):
+            batch_usernames = usernames[start:start + USER_PROFILE_BATCH_SIZE]
+            batch = self.get_trpc_batch(
+                "userProfile.get",
+                [{"username": username} for username in batch_usernames],
+            )
+            for username, result in zip(batch_usernames, batch):
+                profiles[username] = result if isinstance(result, dict) else None
+            if start + USER_PROFILE_BATCH_SIZE < len(usernames):
+                time.sleep(GENERATION_BATCH_DELAY_SECONDS)
+        return profiles
 
     def fetch_creator_articles(self, username: str) -> tuple[list[dict], list[str]]:
         url = f"{self.config.base_url}/api/trpc/article.getInfinite"

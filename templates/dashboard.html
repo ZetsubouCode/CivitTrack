@@ -430,17 +430,17 @@
     <div class="ct-section-heading">
       <div>
         <span class="ct-eyebrow">Single or batch input</span>
-        <h2>User ID Lookup</h2>
+        <h2>User Lookup</h2>
       </div>
       <span id="userLookupPill" class="ct-pill ct-pill-muted">Ready</span>
     </div>
     <form id="userLookupForm">
-      <label class="ct-note-field" for="userIdsInput">CivitAI user ID list</label>
-      <textarea id="userIdsInput" class="form-control ct-user-id-input" rows="5" placeholder="12042163&#10;123456, 789012"></textarea>
+      <label class="ct-note-field" for="userIdsInput">CivitAI user IDs or usernames</label>
+      <textarea id="userIdsInput" class="form-control ct-user-id-input" rows="5" placeholder="123456&#10;SomeUsername&#10;@AnotherUser"></textarea>
       <div class="ct-settings-actions">
         <button id="resolveUsers" class="btn ct-btn-primary" type="submit"><i class="bi bi-search"></i> Resolve Users</button>
         <button id="clearUserLookup" class="btn ct-btn-quiet" type="button"><i class="bi bi-x-circle"></i> Clear</button>
-        <small id="userLookupHelp" class="ct-help">Batch lookup is limited to 100 IDs at a time.</small>
+        <small id="userLookupHelp" class="ct-help">Enter up to 100 IDs, usernames, or @usernames, separated by commas or lines.</small>
       </div>
     </form>
   </section>
@@ -509,7 +509,7 @@
     <div class="table-responsive ct-table-wrap">
       <table class="table ct-table ct-user-table mb-0">
         <thead><tr><th>User ID</th><th>Username</th><th>Status</th><th>Source</th><th>Profile</th><th>Actions</th><th>Select</th></tr></thead>
-        <tbody id="userRows"><tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr></tbody>
+        <tbody id="userRows"><tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs or usernames, then resolve.</td></tr></tbody>
       </table>
     </div>
   </section>

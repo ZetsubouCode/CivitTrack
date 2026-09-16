@@ -49,6 +49,7 @@ The current client already exposes the primitives used by `user_service.py`, inc
 - resolve creator data by numeric user ID
 - `fetch_user_profile(username)` via `userProfile.get`
 - fetch IDs the configured account is following via `user.getFollowingUsers`
+- fetch IDs that follow the configured account via paged `user.getList` queries
 - fetch hidden/blocked preferences
 - mutate follow/block relationship state
 - fetch supported user leaderboards
@@ -63,32 +64,58 @@ It does **not** mean the target user follows the configured account.
 
 Do not rename or display this value as `Follows You`.
 
-If reverse-follow state is added later, expose it as a separate field such as `follows_you`. Only populate it from a verified CivitAI response whose direction is known. A combined `mutual` display state can then be derived from `following && follows_you`.
+Reverse-follow state is exposed separately as `follows_you`. A combined `Mutual` display state is derived only from `following && follows_you`.
+
+### Verified reverse-follower procedure
+
+CivitAI's current site tRPC router exposes `user.getList`. CivitTrack requests it with:
+
+```text
+{
+  username: <configured CIVITAI_USERNAME>,
+  type: "followers",
+  limit: 200,
+  page: <1-based page>
+}
+```
+
+The procedure returns an object with `items`, `currentPage`, `pageSize`, `totalItems`, and `totalPages`. Each follower item includes a canonical numeric `id` plus profile fields such as `username`. The first page establishes the page count; remaining pages are fetched with bounded batched tRPC calls. CivitTrack refuses lists over 50 pages (10,000 users) rather than treating a truncated list as confirmed negative.
+
+The upstream router currently marks `user.getList` as public, so a bearer token is not required for this read. CivitTrack still sends its configured API key when present through the standard client headers. A configured username is required because it identifies whose followers are being queried. Follow/block reads and all relationship mutations retain their existing API-key requirements.
+
+If any follower page fails or has an unexpected shape, the complete reverse-follow set is treated as unavailable: normalized rows receive `follows_you: null` and the workflow returns a warning. It never converts a failed or partial follower read into `false`.
 
 ## Username resolution
 
-The client already has `fetch_user_profile(username)`, which returns a profile object when CivitAI can resolve that username. The profile can supply the canonical numeric user ID.
+The client has `fetch_user_profile(username)` for single lookups and `fetch_user_profiles(usernames)` for bounded batched `userProfile.get` lookups. A returned profile supplies the canonical numeric user ID.
 
-When extending the User Resolver to accept usernames:
+The User Resolver accepts usernames as follows:
 
 - keep numeric ID parsing used by block/exclusion actions strict;
 - add a lookup-specific parser rather than weakening `_parse_user_ids()` globally;
 - strip an optional leading `@` from username input;
 - compare canonical usernames case-insensitively where appropriate;
-- batch username profile requests when practical;
+- batch username profile requests in groups of 20;
 - resolve usernames to canonical IDs before reusing existing ID-based relationship/profile enrichment;
 - keep one bad username from failing unrelated valid entries in a mixed lookup batch;
-- deduplicate final users by canonical user ID.
+- deduplicate final users by canonical user ID;
+- fall back to case-insensitive local matches from images, articles, Buzz transactions, blocked-user preferences, and protected users when remote username resolution does not produce an ID.
 
 ## Relationship enrichment
 
 User rows currently combine remote profile data with:
 
 - `following`
+- `follows_you`
 - `blocked`
 - local `excluded` / protected-user state
 
 Relationship lookup failure should produce a warning while still allowing profile resolution where possible.
+
+Directional meanings are fixed:
+
+- `following`: the configured account follows the target user.
+- `follows_you`: the target user follows the configured account (`true`/`false`), or `null` when the complete follower list is unavailable.
 
 ## Leaderboards
 

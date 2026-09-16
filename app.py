@@ -58,7 +58,7 @@ from services.user_service import (
     list_my_comment_anchors,
     list_user_block_exclusions,
     remove_user_block_exclusions,
-    resolve_users_by_ids,
+    resolve_users,
     update_user_relationship,
 )
 
@@ -326,7 +326,8 @@ def users_resolve():
     if not isinstance(payload, dict):
         return jsonify({"ok": False, "error": "User lookup request must be a JSON object."}), 400
     try:
-        return jsonify(resolve_users_by_ids(payload.get("ids")))
+        value = payload.get("values") if "values" in payload else payload.get("ids")
+        return jsonify(resolve_users(value))
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
 

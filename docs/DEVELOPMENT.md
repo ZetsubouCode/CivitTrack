@@ -126,6 +126,8 @@ When username lookup is added, also test:
 - duplicate ID and username pointing to the same account
 - unknown username mixed with valid input
 
+The resolver route must also retain compatibility with the legacy `{ "ids": ... }` request body while the browser uses `{ "values": ... }`.
+
 When reverse-follow state is added, also test:
 
 - following only
@@ -135,6 +137,8 @@ When reverse-follow state is added, also test:
 - relationship lookup unavailable
 - priority sort on direct lookup and comment review
 - no priority reorder for leaderboard rows
+
+For an unavailable or incomplete `user.getList` follower response, verify every affected row uses `follows_you: null` and the response includes a warning; do not accept false negatives from partial pagination.
 
 ## Commit scope
 

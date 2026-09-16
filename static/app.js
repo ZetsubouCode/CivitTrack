@@ -49,6 +49,7 @@ const state = {
   userLookupResult: null,
   userBlockExclusions: [],
   commentReactionAnalysis: null,
+  commentReviewSelection: null,
   commentReactionHistory: [],
   myCommentAnchors: [],
 };
@@ -1758,6 +1759,7 @@ const userLookupStatus = (value) => ({
   deleted: ["Deleted", "ct-quality-warning"],
   found_without_username: ["No username", "ct-quality-partial"],
   not_found: ["Not found", "ct-quality-unavailable"],
+  unresolved: ["Unresolved", "ct-quality-unavailable"],
 }[value] || [value || "Unknown", "ct-quality-unavailable"]);
 
 const userLookupSource = (value) => ({
@@ -1766,6 +1768,9 @@ const userLookupSource = (value) => ({
   model_article: "Stored articles",
   buzz_transaction: "Buzz activity",
   blocked_user_preference: "Blocked users",
+  user_block_exclusion: "Protected users",
+  user_profile: "CivitAI profile",
+  username_lookup: "Username lookup",
   "leaderboard:guardian": "Guardian leaderboard",
   "leaderboard:knights-new-order": "Knights leaderboard",
   unavailable: "Unavailable",
@@ -1773,6 +1778,35 @@ const userLookupSource = (value) => ({
 
 const userExclusionIds = () => new Set((state.userBlockExclusions || []).map((row) => Number(row.user_id)));
 const userIsExcluded = (userId) => userExclusionIds().has(Number(userId));
+
+function userRelationshipPriority(user, unresolvedLast = false) {
+  if (user.following === true && user.follows_you === true) return 0;
+  if (user.follows_you === true) return 1;
+  if (unresolvedLast && (!user.user_id || ["not_found", "unresolved"].includes(user.status))) return 3;
+  return 2;
+}
+
+function stableFollowerSort(users, unresolvedLast = false) {
+  return users.map((user, index) => ({ user, index })).sort((left, right) => (
+    userRelationshipPriority(left.user, unresolvedLast) - userRelationshipPriority(right.user, unresolvedLast)
+    || left.index - right.index
+  )).map(({ user }) => user);
+}
+
+function userRelationshipBadges(user, excluded) {
+  const relationship = user.following === true && user.follows_you === true
+    ? `<span class="ct-quality ct-quality-good">Mutual</span>`
+    : user.follows_you === true
+    ? `<span class="ct-quality ct-quality-partial">Follows You</span>`
+    : user.following === true
+    ? `<span class="ct-quality ct-quality-good">Following</span>`
+    : "";
+  return [
+    relationship,
+    user.blocked ? `<span class="ct-quality ct-quality-failed">Blocked</span>` : "",
+    excluded ? `<span class="ct-quality ct-quality-warning">Protected</span>` : "",
+  ].filter(Boolean);
+}
 
 function syncUserExcludedState(ids, excluded) {
   const targetIds = new Set(ids.map(Number));
@@ -1862,25 +1896,31 @@ async function removeUserBlockExclusions(ids) {
 }
 
 function renderUserLookupResults(result) {
+  const preserveSelection = state.userLookupResult === result;
+  const selectedIds = preserveSelection
+    ? new Set($$("[data-user-block-select]:checked").map((input) => Number(input.dataset.userBlockSelect)))
+    : new Set();
   state.userLookupResult = result || null;
-  const rows = result?.users || [];
+  const sourceRows = result?.users || [];
+  const rows = result?.leaderboard_id ? [...sourceRows] : stableFollowerSort(sourceRows, true);
   const blockedCount = rows.filter((row) => row.blocked).length;
   const excludedCount = rows.filter((row) => row.excluded || userIsExcluded(row.user_id)).length;
-  const blockableCount = rows.filter((row) => !row.blocked && !(row.excluded || userIsExcluded(row.user_id))).length;
+  const blockableCount = rows.filter((row) => row.user_id && !row.blocked && !(row.excluded || userIsExcluded(row.user_id))).length;
   $("#userResultSummary").textContent = rows.length
-    ? `${fmt(result.found_count || 0)} of ${fmt(rows.length)} user ID${rows.length === 1 ? "" : "s"} resolved; ${fmt(blockableCount)} blockable${blockedCount ? `, ${fmt(blockedCount)} already blocked` : ""}${excludedCount ? `, ${fmt(excludedCount)} protected` : ""}.`
+    ? `${fmt(result.found_count || 0)} of ${fmt(rows.length)} lookup result${rows.length === 1 ? "" : "s"} resolved; ${fmt(blockableCount)} blockable${blockedCount ? `, ${fmt(blockedCount)} already blocked` : ""}${excludedCount ? `, ${fmt(excludedCount)} protected` : ""}.`
     : "No lookup run yet.";
-  $("#userLookupPill").className = `ct-pill ${result?.remote_error ? "ct-pill-warning" : "ct-pill-success"}`;
-  $("#userLookupPill").textContent = result?.remote_error ? "Partial" : "Done";
+  const partial = Boolean(result?.remote_error || result?.warnings?.length || result?.unresolved_count);
+  $("#userLookupPill").className = `ct-pill ${partial ? "ct-pill-warning" : "ct-pill-success"}`;
+  $("#userLookupPill").textContent = partial ? "Partial" : "Done";
   $("#userLookupHelp").textContent = result?.remote_error
     ? `CivitAI lookup failed: ${result.remote_error}. Local fallback matches are still shown.`
     : result?.warnings?.length
     ? result.warnings.join(" ")
     : result?.leaderboard_id
     ? `Loaded top ${fmt(rows.length)} from ${result.leaderboard_title}. Already-blocked and protected users cannot be selected.`
-    : "Batch lookup is limited to 100 IDs at a time.";
+    : "Batch lookup is limited to 100 IDs or usernames at a time.";
   if (!rows.length) {
-    $("#userRows").innerHTML = `<tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr>`;
+    $("#userRows").innerHTML = `<tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs or usernames, then resolve.</td></tr>`;
     updateUserSelectionSummary();
     return;
   }
@@ -1889,11 +1929,7 @@ function renderUserLookupResults(result) {
     const followLabel = row.following ? "Unfollow" : "Follow";
     const blockLabel = row.blocked ? "Unblock" : "Block";
     const excluded = row.excluded || userIsExcluded(row.user_id);
-    const relationship = [
-      row.following ? `<span class="ct-quality ct-quality-good">Following</span>` : "",
-      row.blocked ? `<span class="ct-quality ct-quality-failed">Blocked</span>` : "",
-      excluded ? `<span class="ct-quality ct-quality-warning">Protected</span>` : "",
-    ].filter(Boolean).join(" ");
+    const relationship = userRelationshipBadges(row, excluded).join(" ");
     const profile = row.profile_url
       ? `<a href="${esc(row.profile_url)}" target="_blank" rel="noreferrer">Open profile</a>`
       : `<span class="ct-help">${esc(row.error || "Unavailable")}</span>`;
@@ -1901,28 +1937,29 @@ function renderUserLookupResults(result) {
       ? `<br><span class="ct-help">Rank #${fmt(row.leaderboard_position)}${row.leaderboard_score !== null && row.leaderboard_score !== undefined ? ` | Score ${fmt(row.leaderboard_score)}` : ""}</span>`
       : "";
     const disabledReason = row.blocked ? "blocked" : excluded ? "protected" : "";
+    const hasUserId = Number(row.user_id) > 0;
+    const actions = hasUserId ? `
+      <div class="ct-user-actions">
+        <button class="btn ct-btn-quiet" type="button" data-user-action="follow" data-user-id="${esc(row.user_id)}">
+          <i class="bi ${row.following ? "bi-person-dash" : "bi-person-plus"}"></i> ${followLabel}
+        </button>
+        <button class="btn ${row.blocked ? "ct-btn-secondary" : "ct-btn-danger"}" type="button" data-user-action="${row.blocked ? "unblock" : "block"}" data-user-id="${esc(row.user_id)}">
+          <i class="bi ${row.blocked ? "bi-person-check" : "bi-person-x"}"></i> ${blockLabel}
+        </button>
+        <button class="btn ct-btn-secondary" type="button" data-user-action="${excluded ? "unprotect" : "protect"}" data-user-id="${esc(row.user_id)}">
+          <i class="bi ${excluded ? "bi-shield-x" : "bi-shield-check"}"></i> ${excluded ? "Remove Protect" : "Protect"}
+        </button>
+      </div>` : `<span class="ct-help">Unavailable</span>`;
     return `
       <tr>
-        <td><strong>${fmt(row.user_id)}</strong></td>
-        <td>${row.username ? esc(row.username) : "<span class=\"ct-help\">Unknown</span>"} ${relationship}</td>
+        <td><strong>${hasUserId ? fmt(row.user_id) : "—"}</strong></td>
+        <td>${row.username ? esc(row.username) : row.input_type === "username" ? `<span class="ct-help">${esc(row.input)}</span>` : "<span class=\"ct-help\">Unknown</span>"} ${relationship}</td>
         <td><span class="ct-quality ${badgeClass}">${esc(label)}</span>${leaderboardMeta}</td>
         <td>${esc(userLookupSource(row.source))}</td>
         <td>${profile}</td>
+        <td>${actions}</td>
         <td>
-          <div class="ct-user-actions">
-            <button class="btn ct-btn-quiet" type="button" data-user-action="follow" data-user-id="${esc(row.user_id)}">
-              <i class="bi ${row.following ? "bi-person-dash" : "bi-person-plus"}"></i> ${followLabel}
-            </button>
-            <button class="btn ${row.blocked ? "ct-btn-secondary" : "ct-btn-danger"}" type="button" data-user-action="${row.blocked ? "unblock" : "block"}" data-user-id="${esc(row.user_id)}">
-              <i class="bi ${row.blocked ? "bi-person-check" : "bi-person-x"}"></i> ${blockLabel}
-            </button>
-            <button class="btn ct-btn-secondary" type="button" data-user-action="${excluded ? "unprotect" : "protect"}" data-user-id="${esc(row.user_id)}">
-              <i class="bi ${excluded ? "bi-shield-x" : "bi-shield-check"}"></i> ${excluded ? "Remove Protect" : "Protect"}
-            </button>
-          </div>
-        </td>
-        <td>
-          <label class="ct-check"><input type="checkbox" data-user-block-select="${esc(row.user_id)}" data-block-disabled-reason="${esc(disabledReason)}" ${disabledReason ? "disabled" : ""}> Block</label>
+          ${hasUserId ? `<label class="ct-check"><input type="checkbox" data-user-block-select="${esc(row.user_id)}" data-block-disabled-reason="${esc(disabledReason)}" ${disabledReason ? "disabled" : ""} ${selectedIds.has(Number(row.user_id)) && !disabledReason ? "checked" : ""}> Block</label>` : `<span class="ct-help">Unavailable</span>`}
         </td>
       </tr>`;
   }).join("");
@@ -1931,9 +1968,9 @@ function renderUserLookupResults(result) {
 
 async function resolveUsers(event) {
   event.preventDefault();
-  const ids = $("#userIdsInput").value.trim();
-  if (!ids) {
-    toast("Enter at least one CivitAI user ID.", "warning");
+  const values = $("#userIdsInput").value.trim();
+  if (!values) {
+    toast("Enter at least one CivitAI user ID or username.", "warning");
     return;
   }
   const button = $("#resolveUsers");
@@ -1945,10 +1982,10 @@ async function resolveUsers(event) {
     const result = await api("/api/users/resolve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
+      body: JSON.stringify({ values }),
     });
     renderUserLookupResults(result);
-    toast(`Resolved ${fmt(result.found_count)} of ${fmt(result.count)} user ID${result.count === 1 ? "" : "s"}.`);
+    toast(`Resolved ${fmt(result.found_count)} of ${fmt(result.count)} lookup result${result.count === 1 ? "" : "s"}.`);
   } catch (error) {
     $("#userLookupPill").className = "ct-pill ct-pill-warning";
     $("#userLookupPill").textContent = "Error";
@@ -1964,9 +2001,9 @@ function clearUserLookup() {
   state.userLookupResult = null;
   $("#userLookupPill").className = "ct-pill ct-pill-muted";
   $("#userLookupPill").textContent = "Ready";
-  $("#userLookupHelp").textContent = "Batch lookup is limited to 100 IDs at a time.";
+  $("#userLookupHelp").textContent = "Enter up to 100 IDs, usernames, or @usernames, separated by commas or lines.";
   $("#userResultSummary").textContent = "No lookup run yet.";
-  $("#userRows").innerHTML = `<tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs, then resolve.</td></tr>`;
+  $("#userRows").innerHTML = `<tr><td colspan="7" class="ct-table-empty">Enter one or more CivitAI user IDs or usernames, then resolve.</td></tr>`;
   updateUserSelectionSummary();
 }
 
@@ -2226,11 +2263,12 @@ function matchingCommentReactionUsers() {
   const selected = new Set(selectedCommentReactions());
   const excludeAuthors = $("#commentExcludeAuthors").checked;
   const hideBlocked = $("#commentHideBlocked").checked;
-  return analysis.reaction_users.filter((user) => {
+  const filtered = analysis.reaction_users.filter((user) => {
     if (excludeAuthors && user.is_comment_author) return false;
     if (hideBlocked && user.blocked) return false;
     return (user.reaction_types || []).some((reaction) => selected.has(reaction));
   });
+  return stableFollowerSort(filtered);
 }
 
 function reactionEventSummary(user) {
@@ -2285,6 +2323,11 @@ function renderCommentReactionAnalysis() {
     updateCommentSelectionSummary();
     return;
   }
+  if (!(state.commentReviewSelection instanceof Set)) {
+    state.commentReviewSelection = new Set(matches.filter((user) => (
+      !user.blocked && !(user.excluded || userIsExcluded(user.user_id))
+    )).map((user) => Number(user.user_id)));
+  }
   $("#commentReactionRows").innerHTML = matches.map((user) => {
     const excluded = user.excluded || userIsExcluded(user.user_id);
     const disabledReason = user.blocked ? "blocked" : excluded ? "protected" : "";
@@ -2292,9 +2335,7 @@ function renderCommentReactionAnalysis() {
       ? `<a href="${esc(user.profile_url)}" target="_blank" rel="noreferrer">Open profile</a>`
       : `<span class="ct-help">Unavailable</span>`;
     const status = [
-      user.blocked ? `<span class="ct-quality ct-quality-failed">Blocked</span>` : "",
-      user.following ? `<span class="ct-quality ct-quality-good">Following</span>` : "",
-      excluded ? `<span class="ct-quality ct-quality-warning">Protected</span>` : "",
+      ...userRelationshipBadges(user, excluded),
       user.is_comment_author ? `<span class="ct-quality ct-quality-warning">Author</span>` : "",
     ].filter(Boolean).join(" ") || `<span class="ct-quality ct-quality-unavailable">Not blocked</span>`;
     return `
@@ -2306,7 +2347,7 @@ function renderCommentReactionAnalysis() {
         <td>${profile}</td>
         <td>
           <div class="ct-user-actions">
-            <label class="ct-check"><input type="checkbox" data-comment-block-user="${esc(user.user_id)}" data-block-disabled-reason="${esc(disabledReason)}" ${disabledReason ? "disabled" : "checked"}> Block</label>
+            <label class="ct-check"><input type="checkbox" data-comment-block-user="${esc(user.user_id)}" data-block-disabled-reason="${esc(disabledReason)}" ${disabledReason ? "disabled" : ""} ${!disabledReason && state.commentReviewSelection.has(Number(user.user_id)) ? "checked" : ""}> Block</label>
             ${user.blocked ? `<button class="btn ct-btn-secondary" type="button" data-comment-user-action="unblock" data-user-id="${esc(user.user_id)}"><i class="bi bi-person-check"></i> Unblock</button>` : ""}
             <button class="btn ct-btn-secondary" type="button" data-comment-user-action="${excluded ? "unprotect" : "protect"}" data-user-id="${esc(user.user_id)}">
               <i class="bi ${excluded ? "bi-shield-x" : "bi-shield-check"}"></i> ${excluded ? "Remove Protect" : "Protect"}
@@ -2336,6 +2377,7 @@ async function analyzeCommentReactions(event) {
       body: JSON.stringify({ comment_id: Number(commentId) }),
     });
     state.commentReactionAnalysis = result;
+    state.commentReviewSelection = null;
     $("#commentReactionPill").className = `ct-pill ${result.warnings?.length ? "ct-pill-warning" : "ct-pill-success"}`;
     $("#commentReactionPill").textContent = result.warnings?.length ? "Partial" : "Done";
     $("#commentReactionHelp").textContent = result.warnings?.length ? result.warnings.join(" ") : "Review matching users, then block selected accounts if needed.";
@@ -2501,15 +2543,29 @@ $("#commentReactionFilters").addEventListener("click", (event) => {
 $("#commentExcludeAuthors").addEventListener("change", renderCommentReactionAnalysis);
 $("#commentHideBlocked").addEventListener("change", renderCommentReactionAnalysis);
 $("#commentReactionRows").addEventListener("change", (event) => {
-  if (event.target.matches("[data-comment-block-user]")) updateCommentSelectionSummary();
+  if (event.target.matches("[data-comment-block-user]")) {
+    const userId = Number(event.target.dataset.commentBlockUser);
+    if (!(state.commentReviewSelection instanceof Set)) state.commentReviewSelection = new Set();
+    if (event.target.checked) state.commentReviewSelection.add(userId);
+    else state.commentReviewSelection.delete(userId);
+    updateCommentSelectionSummary();
+  }
 });
 $("#commentReactionRows").addEventListener("click", runCommentUserAction);
 $("#selectAllReactionUsers").addEventListener("click", () => {
-  $$("[data-comment-block-user]:not(:disabled)").forEach((input) => { input.checked = true; });
+  if (!(state.commentReviewSelection instanceof Set)) state.commentReviewSelection = new Set();
+  $$("[data-comment-block-user]:not(:disabled)").forEach((input) => {
+    input.checked = true;
+    state.commentReviewSelection.add(Number(input.dataset.commentBlockUser));
+  });
   updateCommentSelectionSummary();
 });
 $("#clearReactionUserSelection").addEventListener("click", () => {
-  $$("[data-comment-block-user]:not(:disabled)").forEach((input) => { input.checked = false; });
+  if (!(state.commentReviewSelection instanceof Set)) state.commentReviewSelection = new Set();
+  $$("[data-comment-block-user]:not(:disabled)").forEach((input) => {
+    input.checked = false;
+    state.commentReviewSelection.delete(Number(input.dataset.commentBlockUser));
+  });
   updateCommentSelectionSummary();
 });
 $("#blockSelectedReactionUsers").addEventListener("click", blockSelectedReactionUsers);
